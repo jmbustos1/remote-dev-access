@@ -97,7 +97,11 @@ Cada fase termina en algo probable por sí solo.
 - **Hecho cuando:** conecta desde 4G aun con NAT simétrico (primer arranque ~40 s).
 
 ### Fase 6 — APK
+> La APK se arma **desde ya** (no al final) como app de pruebas: cada fase le agrega un botón en la
+> pestaña Pruebas y todo se depura en la pestaña Logs. Termux queda solo como alternativa.
+
 - Kotlin + Jetpack Compose; `core` compilado con `gomobile bind` → `core.aar`.
+- Pestañas: **Terminal · Logs · Ajustes** (+ **Pruebas** durante el desarrollo).
 - Cliente SSH dentro del core (`golang.org/x/crypto/ssh`) → no depende de Termux.
 - **Pestaña Terminal:** emulador (`terminal-view` / `terminal-emulator` de Termux, Apache 2.0),
   lista de PCs con estado online/offline, botón conectar.
@@ -107,16 +111,30 @@ Cada fase termina en algo probable por sí solo.
   - Filtros por etapa y nivel; buffer circular en memoria + archivo rotativo.
   - Panel de estado del enlace: directo/relay, RTT, bytes in/out, candidatos ICE.
   - Botón "Compartir logs" (exporta archivo por intent de Android).
+- **Pestaña Ajustes / seguridad:**
+  - URL de señalización (`wss://…execute-api…`) y nombre del dispositivo.
+  - Token del dispositivo → cifrado con Android Keystore. Nunca embebido en la APK.
+  - Par de llaves SSH **generado en el celular**; la privada no sale del dispositivo. Botón
+    "copiar llave pública" para agregarla a `authorized_keys` de cada PC.
+  - v1: carga manual (pegar). v2 (fase 7): emparejamiento por QR con `rda-agent pair`.
+  - Opcional: huella/PIN al abrir la app.
 - Keepalive solo con la app en primer plano.
-- Build local: `./gradlew assembleDebug` → APK directo (sideload, sin Play Store).
+- **Distribución:** APK de release subida a Google Drive y descargada en el celular (sideload).
+  - Keystore de release propio desde el día 1 (las actualizaciones exigen la misma firma).
+    Fuera de git, con respaldo: perderlo obliga a desinstalar para actualizar.
+  - `versionCode` autoincremental en el script de build.
+  - La APK no contiene secretos: cualquiera con el link podría descargarla.
 - **Hecho cuando:** instalo la APK, toco `pc-casa` y estoy en Claude.
 
 ### Fase 7 — Multi-PC y endurecimiento
 - Registro de `pc-2`, `pc-trabajo`; rotación/revocación de tokens.
+- Emparejamiento por QR: `rda-agent pair` muestra URL + código de un solo uso; la APK lo escanea,
+  obtiene su token y envía su llave pública SSH al PC.
 - Logs del agente en `journalctl`; opcional: enviar últimos logs del PC a la APK para debug.
 
-**Orden:** 1 → 4 primero (valor real usando Termux). Luego 6 (APK) y 5 (relay), en el orden
-que pida el resultado del NAT 4G de la fase 2.
+**Orden:** 0 → 1 (hecho) → **APK mínima** (pestañas Pruebas + Logs + Ajustes, botón "Probar
+STUN") → 2 → 3 → 4, agregando cada capacidad a la APK. Luego 5 (relay) según el resultado del NAT
+4G, y 7.
 
 ---
 
