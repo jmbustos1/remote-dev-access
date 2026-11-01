@@ -17,6 +17,8 @@ android/local.properties
 *.aab
 *.jks
 *.keystore
+android/keystore.properties
+android/app/libs/
 
 # Secretos
 *.pem
