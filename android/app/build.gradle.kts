@@ -27,6 +27,8 @@ android {
         // Autoincremental: cada commit sube el versionCode, así Android acepta la actualización.
         versionCode = git("rev-list", "--count", "HEAD").toInt()
         versionName = git("describe", "--tags", "--always", "--dirty")
+        // Solo las ABIs para las que `make aar` compila el core Go.
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
     signingConfigs {
