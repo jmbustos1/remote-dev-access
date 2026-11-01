@@ -30,7 +30,8 @@ termux: ## cli para el celular (Android arm64, Go puro) → bin/rda-android-arm6
 aar: ## core Go → android/app/libs/core.aar (arm64 para el celular, amd64 para el emulador)
 	mkdir -p android/app/libs bin/tools
 	go build -o bin/tools/ golang.org/x/mobile/cmd/gobind golang.org/x/mobile/cmd/gomobile
-	PATH="$(CURDIR)/bin/tools:$$PATH" gomobile bind -target=android/arm64,android/amd64 -androidapi 24 \
+	# gomobile invoca "go" del PATH: le damos el toolchain que pide go.mod, no el del sistema.
+	PATH="$(CURDIR)/bin/tools:$$(go env GOROOT)/bin:$$PATH" gomobile bind -target=android/arm64,android/amd64 -androidapi 24 \
 		-javapkg dev.jmbustos.rda \
 		-ldflags '-s -w -X github.com/jmbustos1/remote-dev-access/core/mobile.version=$(VERSION)' \
 		-o android/app/libs/core.aar ./core/mobile
