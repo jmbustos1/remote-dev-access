@@ -35,3 +35,13 @@ Observaciones (2026-11-01):
 - `sendto: operation not permitted` en el celular: probablemente Android bloqueando red con la
   app en segundo plano (mientras se copiaban direcciones en otra app). Por confirmar.
 - Router de la casa: MiniUPnPd 1.9 responde (UPnP IGD); NAT-PMP no. El PC tiene IPv6 global.
+
+## Fase 2b — IPv6 y UPnP
+
+- PC: IPv6 global sin NAT (STUN por IPv6 devuelve la propia dirección del equipo).
+- Router: UPnP abre y cierra el puerto UDP sin problemas; reenvía el mismo número de puerto que
+  ya usaba el NAT (candidato `stun+upnp`). No hay doble NAT (IP externa del router = IP de STUN).
+
+| Fecha | PC | Celular | Camino ganador | RTT |
+|---|---|---|---|---|
+| | wifi casa (UPnP + IPv6) | 4G | pendiente | |

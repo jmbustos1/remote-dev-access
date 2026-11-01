@@ -39,6 +39,22 @@ type stunReport struct {
 	Local   string       `json:"local"`
 	NAT     string       `json:"nat"`
 	Results []stunResult `json:"results"`
+	IPv6    []stunResult `json:"ipv6"`
+}
+
+func toResults(rs []stun.Result) []stunResult {
+	out := []stunResult{}
+	for _, r := range rs {
+		sr := stunResult{Server: r.Server}
+		if r.Err != nil {
+			sr.Error = r.Err.Error()
+		} else {
+			sr.Mapped = r.Mapped.String()
+			sr.RTTms = r.RTT.Milliseconds()
+		}
+		out = append(out, sr)
+	}
+	return out
 }
 
 // ProbeSTUN consulta los servidores STUN por defecto desde un mismo socket y
@@ -48,16 +64,11 @@ func ProbeSTUN(timeoutMs int) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	out := stunReport{Local: rep.Local.String(), NAT: rep.Kind.String()}
-	for _, r := range rep.Results {
-		sr := stunResult{Server: r.Server}
-		if r.Err != nil {
-			sr.Error = r.Err.Error()
-		} else {
-			sr.Mapped = r.Mapped.String()
-			sr.RTTms = r.RTT.Milliseconds()
-		}
-		out.Results = append(out.Results, sr)
+	out := stunReport{
+		Local:   rep.Local.String(),
+		NAT:     rep.Kind.String(),
+		Results: toResults(rep.Results),
+		IPv6:    toResults(rep.IPv6),
 	}
 	b, err := json.Marshal(out)
 	return string(b), err

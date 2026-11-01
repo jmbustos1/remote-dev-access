@@ -49,6 +49,14 @@ class MainActivity : ComponentActivity() {
             LogStore.app("INFO", "app iniciada", "app=${BuildConfig.VERSION_NAME} core=${Mobile.version()}")
         }
         val settings = SettingsStore(applicationContext)
+        lifecycle.addObserver(object : androidx.lifecycle.DefaultLifecycleObserver {
+            // Android puede cortar la red de la app en segundo plano: dejarlo en los
+            // logs permite correlacionar errores como "sendto: operation not permitted".
+            override fun onStart(owner: androidx.lifecycle.LifecycleOwner) =
+                LogStore.app("INFO", "app en primer plano")
+            override fun onStop(owner: androidx.lifecycle.LifecycleOwner) =
+                LogStore.app("INFO", "app en segundo plano")
+        })
 
         setContent {
             MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {

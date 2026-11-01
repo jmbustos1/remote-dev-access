@@ -18,18 +18,22 @@ import (
 
 func cmdPunch(args []string) int {
 	fs := flag.NewFlagSet("punch", flag.ExitOnError)
-	peer := fs.String("peer", "", "dirección pública del otro lado (ip:puerto); si se omite, se pide por teclado")
+	peer := fs.String("peer", "", "direcciones del otro lado separadas por espacio; si se omite, se piden por teclado")
+	useUPnP := fs.Bool("upnp", true, "pedirle al router un puerto reenviado (UPnP)")
 	verbose := fs.Bool("v", false, "logs detallados (cada PING/PONG)")
 	fs.Parse(args)
 	logx.Setup(os.Stderr, *verbose)
 
-	var connected atomic.Bool
+	var connected, opened atomic.Bool
 	s, err := punch.Open(context.Background(), punch.Config{
 		STUNServers: stun.DefaultServers,
+		UPnP:        *useUPnP,
 		OnEvent: func(e punch.Event) {
 			switch e.Kind {
 			case punch.EvPublic:
-				fmt.Printf("\n  Tu dirección pública:  %s   ← pásasela al otro lado\n\n", e.Addr)
+				if opened.Load() {
+					fmt.Printf("\n⚠ tus direcciones cambiaron, pásale estas al otro lado:\n  %s\n\n", e.Text)
+				}
 			case punch.EvPunching:
 				fmt.Printf("→ disparando hacia %s ...\n", e.Addr)
 			case punch.EvInbound:
@@ -53,7 +57,18 @@ func cmdPunch(args []string) int {
 		return 1
 	}
 	defer s.Close()
-	fmt.Printf("  (misma red local: %s)\n", s.Local())
+	opened.Store(true)
+
+	fmt.Println("\nTus candidatos:")
+	hasUPnP := false
+	for _, c := range s.Candidates() {
+		fmt.Printf("  %-10s %s\n", c.Kind, c.Addr)
+		hasUPnP = hasUPnP || strings.Contains(c.Kind, punch.CandUPnP)
+	}
+	fmt.Printf("\nCopia esta línea completa y pégala en el otro lado:\n\n  %s\n\n", s.CandidatesString())
+	if hasUPnP {
+		fmt.Println("(con UPnP basta con que el otro lado pegue tu línea: no necesitas pegar la suya)")
+	}
 
 	if *peer != "" {
 		if err := s.Connect(*peer); err != nil {
@@ -61,7 +76,7 @@ func cmdPunch(args []string) int {
 			return 1
 		}
 	} else {
-		fmt.Println("Pega la dirección del otro lado y presiona Enter (mientras tanto mantengo la puerta abierta):")
+		fmt.Println("Pega la línea del otro lado y presiona Enter (mientras tanto mantengo la puerta abierta):")
 	}
 
 	lines := make(chan string)

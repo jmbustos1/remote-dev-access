@@ -1,10 +1,10 @@
-// Package punch implementa el hole punching UDP "a mano" (fase 2).
+// Package punch implementa el hole punching UDP "a mano" (fases 2 y 2b).
 //
-// Una Session es UN socket UDP que hace todo: pregunta su dirección pública por
-// STUN, mantiene viva la puerta del NAT mientras esperamos, dispara paquetes al
-// otro lado y, una vez conectados, mide latencia y transporta mensajes. Usar el
-// mismo socket es la clave: la puerta que abrió el STUN es por la que entra el
-// otro lado.
+// Una Session es UN socket UDP (dual-stack IPv4/IPv6) que hace todo: descubre
+// sus direcciones posibles ("candidatos": STUN IPv4, puerto UPnP, IPv6, red
+// local), mantiene viva la puerta del NAT mientras esperamos, dispara paquetes a
+// TODOS los candidatos del otro lado y se queda con el primero que responde.
+// Es un ICE en miniatura.
 //
 // Protocolo (texto plano, para leerlo en los logs):
 //
@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ import (
 	"github.com/jmbustos1/remote-dev-access/core/logx"
 	"github.com/jmbustos1/remote-dev-access/core/netx"
 	"github.com/jmbustos1/remote-dev-access/core/stun"
+	"github.com/jmbustos1/remote-dev-access/core/upnp"
 )
 
 var magic = []byte("RDA1 ")
@@ -39,24 +41,40 @@ var magic = []byte("RDA1 ")
 // Tiempos del protocolo.
 var (
 	PunchInterval     = 500 * time.Millisecond // ritmo de disparo mientras no hay conexión
-	PunchTimeout      = 45 * time.Second       // cuánto disparar antes de rendirse
-	KeepaliveInterval = 5 * time.Second        // PING estando conectados
+	PunchTimeout      = 60 * time.Second       // disparo rápido; después sigue el keepalive
+	KeepaliveInterval = 5 * time.Second        // PING lento (también tras fallar el punching)
 	STUNRefresh       = 15 * time.Second       // refresco de la puerta mientras esperamos al otro
 	LostAfter         = 20 * time.Second       // sin PONG por este tiempo → conexión perdida
 )
+
+// Tipos de candidato.
+const (
+	CandSTUN  = "stun"  // IPv4 pública según STUN
+	CandUPnP  = "upnp"  // puerto reenviado por el router
+	CandIPv6  = "ipv6"  // IPv6 global (sin NAT)
+	CandLocal = "local" // red local (mismo wifi)
+)
+
+// Candidate es una dirección por la que el otro lado podría alcanzarnos.
+type Candidate struct {
+	Kind string
+	Addr netip.AddrPort
+}
+
+func (c Candidate) String() string { return c.Kind + "=" + c.Addr.String() }
 
 // EventKind enumera lo que le pasa a una sesión.
 type EventKind int
 
 const (
-	EvPublic    EventKind = iota // conocemos nuestra dirección pública (o cambió)
+	EvPublic    EventKind = iota // cambió nuestra lista de candidatos
 	EvPunching                   // empezamos a disparar hacia el otro lado
 	EvInbound                    // llegó el primer paquete del otro lado (una dirección abierta)
 	EvConnected                  // ida y vuelta confirmada
 	EvRTT                        // nueva medición de latencia
 	EvMessage                    // mensaje de chat recibido
 	EvLost                       // dejamos de recibir respuestas
-	EvFailed                     // el punching no logró conectar
+	EvFailed                     // el disparo rápido no conectó (el keepalive sigue intentando)
 )
 
 func (k EventKind) String() string {
@@ -66,17 +84,19 @@ func (k EventKind) String() string {
 // Event se entrega al callback de la sesión.
 type Event struct {
 	Kind EventKind
-	Addr netip.AddrPort // public / punching / inbound / connected
+	Addr netip.AddrPort // punching / inbound / connected
 	RTT  time.Duration  // connected / rtt
-	Text string         // message / failed
+	Text string         // public (candidatos) / message / failed
 }
 
 // Config de una sesión.
 type Config struct {
-	// STUNServers a probar en orden. Vacío = sin STUN (la dirección pública es la
-	// local; útil en tests y en una misma red).
+	// STUNServers a probar en orden (se usan para IPv4 e IPv6). Vacío = sin STUN:
+	// el único candidato es la dirección local (tests, misma red).
 	STUNServers []string
-	OnEvent     func(Event)
+	// UPnP: pedirle al router un puerto reenviado (para PCs en la casa).
+	UPnP    bool
+	OnEvent func(Event)
 }
 
 // Session es un socket UDP con estado de punching.
@@ -86,13 +106,15 @@ type Session struct {
 	cfg     Config
 	closeCh chan struct{}
 	once    sync.Once
+	local   netip.AddrPort
+	mapping *upnp.Mapping
 
 	mu         sync.Mutex
-	public     netip.AddrPort
-	local      netip.AddrPort
-	stunServer *net.UDPAddr
+	cands      []Candidate
+	stunServer *net.UDPAddr // servidor IPv4 para refrescar la puerta
 	pending    map[stun.TxID]chan []byte
-	peer       netip.AddrPort
+	remote     []netip.AddrPort // candidatos del otro lado
+	peer       netip.AddrPort   // dirección elegida (la que respondió)
 	punching   bool
 	inbound    bool
 	connected  bool
@@ -101,14 +123,17 @@ type Session struct {
 	lastPong   time.Time
 }
 
-// Open abre el socket y averigua la dirección pública.
+// Open abre el socket y reúne nuestros candidatos.
 func Open(ctx context.Context, cfg Config) (*Session, error) {
-	conn, err := net.ListenUDP("udp4", &net.UDPAddr{})
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{}) // dual-stack: IPv4 e IPv6 en el mismo puerto
 	if err != nil {
-		return nil, fmt.Errorf("abriendo socket UDP: %w", err)
+		if conn, err = net.ListenUDP("udp4", &net.UDPAddr{}); err != nil {
+			return nil, fmt.Errorf("abriendo socket UDP: %w", err)
+		}
 	}
 	idb := make([]byte, 4)
 	rand.Read(idb)
+	port := uint16(conn.LocalAddr().(*net.UDPAddr).Port)
 	s := &Session{
 		conn:    conn,
 		id:      hex.EncodeToString(idb),
@@ -116,46 +141,120 @@ func Open(ctx context.Context, cfg Config) (*Session, error) {
 		closeCh: make(chan struct{}),
 		pending: map[stun.TxID]chan []byte{},
 		sentAt:  map[uint64]time.Time{},
-		local:   netx.LocalAddr(uint16(conn.LocalAddr().(*net.UDPAddr).Port)),
+		local:   netx.LocalAddr(port),
 	}
 	go s.readLoop()
 
 	log := logx.For(logx.StagePunch)
 	log.Info("sesión abierta", "id", s.id, "local", s.local)
 
-	if len(cfg.STUNServers) == 0 {
-		s.public = s.local
-	} else if err := s.discover(ctx); err != nil {
-		s.Close()
-		return nil, err
+	if len(cfg.STUNServers) > 0 {
+		pub4, err := s.discover(ctx, "ip4")
+		if err != nil {
+			s.Close()
+			return nil, err
+		}
+		s.addCand(Candidate{CandSTUN, pub4})
+
+		if cfg.UPnP {
+			if m, err := upnp.MapUDP(ctx, port, "remote-dev-access", time.Hour); err != nil {
+				log.Info("UPnP no disponible", "err", err)
+			} else {
+				s.mapping = m
+				if m.External.Addr() != pub4.Addr() {
+					log.Warn("la IP externa del router no es la pública: hay doble NAT y el puerto UPnP no servirá desde internet",
+						"router", m.External.Addr(), "stun", pub4.Addr())
+				}
+				s.addCand(Candidate{CandUPnP, m.External})
+			}
+		}
+
+		if pub6, err := s.discover(ctx, "ip6"); err != nil {
+			log.Info("sin IPv6 pública en esta red", "err", err)
+		} else {
+			s.addCand(Candidate{CandIPv6, pub6})
+		}
 	}
-	s.emit(Event{Kind: EvPublic, Addr: s.public})
+	s.addCand(Candidate{CandLocal, s.local})
+
+	log.Info("candidatos listos", "candidatos", s.CandidatesString())
+	s.emit(Event{Kind: EvPublic, Text: s.CandidatesString()})
 	go s.maintain()
 	return s, nil
 }
 
-// Public es nuestra dirección vista desde internet: la que hay que pasarle al otro lado.
-func (s *Session) Public() netip.AddrPort { s.mu.Lock(); defer s.mu.Unlock(); return s.public }
+func (s *Session) addCand(c Candidate) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, x := range s.cands {
+		if x.Addr == c.Addr {
+			// Misma dirección por dos vías (p. ej. el router reenvió el mismo
+			// puerto que ya mapeaba el NAT): lo anotamos en el tipo.
+			s.cands[i].Kind += "+" + c.Kind
+			return
+		}
+	}
+	s.cands = append(s.cands, c)
+}
 
-// Local es la dirección dentro de la red local (sirve si ambos están en el mismo wifi).
+// Candidates devuelve nuestras direcciones posibles, en orden de preferencia.
+func (s *Session) Candidates() []Candidate {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.cands)
+}
+
+// CandidatesString es lo que hay que pasarle al otro lado: direcciones separadas por espacio.
+func (s *Session) CandidatesString() string {
+	var parts []string
+	for _, c := range s.Candidates() {
+		parts = append(parts, c.Addr.String())
+	}
+	return strings.Join(parts, " ")
+}
+
+// Public es nuestra IPv4 vista desde internet (o la local si no hay STUN).
+func (s *Session) Public() netip.AddrPort {
+	c := s.Candidates()
+	return c[0].Addr
+}
+
+// Local es la dirección dentro de la red local.
 func (s *Session) Local() netip.AddrPort { return s.local }
 
-// Connect empieza a disparar hacia peer ("ip:puerto"). No bloquea.
-func (s *Session) Connect(peer string) error {
-	ap, err := netip.ParseAddrPort(strings.TrimSpace(peer))
+// ParseCandidates acepta direcciones "ip:puerto" o "[ipv6]:puerto" separadas por
+// espacios, comas o saltos de línea.
+func ParseCandidates(text string) ([]netip.AddrPort, error) {
+	var out []netip.AddrPort
+	for _, f := range strings.FieldsFunc(text, func(r rune) bool { return r == ' ' || r == ',' || r == '\n' || r == '\t' }) {
+		ap, err := netip.ParseAddrPort(f)
+		if err != nil {
+			return nil, fmt.Errorf("dirección inválida %q (formato ip:puerto o [ipv6]:puerto)", f)
+		}
+		out = append(out, netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()))
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no hay direcciones")
+	}
+	return out, nil
+}
+
+// Connect empieza a disparar hacia todos los candidatos del otro lado. No bloquea.
+func (s *Session) Connect(candidates string) error {
+	remote, err := ParseCandidates(candidates)
 	if err != nil {
-		return fmt.Errorf("dirección inválida %q (formato ip:puerto): %w", peer, err)
+		return err
 	}
 	s.mu.Lock()
 	if s.punching {
 		s.mu.Unlock()
 		return errors.New("ya se está conectando")
 	}
-	s.peer, s.punching = ap, true
+	s.remote, s.punching = remote, true
 	s.mu.Unlock()
 
-	logx.For(logx.StagePunch).Info("disparando hacia el otro lado", "peer", ap)
-	s.emit(Event{Kind: EvPunching, Addr: ap})
+	logx.For(logx.StagePunch).Info("disparando hacia todos los candidatos del otro lado", "candidatos", candidates)
+	s.emit(Event{Kind: EvPunching, Addr: remote[0]})
 	go s.punchLoop()
 	return nil
 }
@@ -171,11 +270,14 @@ func (s *Session) Send(text string) error {
 	return s.write(peer, "MSG "+s.id+" "+text)
 }
 
-// Close cierra el socket y detiene todo.
+// Close cierra el socket, libera el puerto UPnP y detiene todo.
 func (s *Session) Close() {
 	s.once.Do(func() {
 		close(s.closeCh)
 		s.conn.Close()
+		if s.mapping != nil {
+			s.mapping.Close()
+		}
 		logx.For(logx.StagePunch).Info("sesión cerrada", "id", s.id)
 	})
 }
@@ -188,28 +290,30 @@ func (s *Session) emit(e Event) {
 
 // --- STUN sobre el socket compartido ---------------------------------------
 
-func (s *Session) discover(ctx context.Context) error {
+func (s *Session) discover(ctx context.Context, family string) (netip.AddrPort, error) {
 	log := logx.For(logx.StageSTUN)
 	var lastErr error
 	for _, name := range s.cfg.STUNServers {
-		addr, err := netx.ResolveUDP4(ctx, name)
+		addr, err := netx.ResolveUDP(ctx, name, family)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		mapped, err := s.bind(addr, 2*time.Second, 3)
+		mapped, err := s.bind(addr, 2*time.Second, 2)
 		if err != nil {
 			lastErr = err
-			log.Warn("servidor STUN sin respuesta", "server", name, "err", err)
+			log.Debug("servidor STUN sin respuesta", "server", name, "family", family, "err", err)
 			continue
 		}
-		s.mu.Lock()
-		s.public, s.stunServer = mapped, addr
-		s.mu.Unlock()
-		log.Info("dirección pública", "public", mapped, "server", name)
-		return nil
+		if family == "ip4" {
+			s.mu.Lock()
+			s.stunServer = addr
+			s.mu.Unlock()
+		}
+		log.Info("dirección pública", "family", family, "public", mapped, "server", name)
+		return mapped, nil
 	}
-	return fmt.Errorf("ningún servidor STUN respondió: %w", lastErr)
+	return netip.AddrPort{}, fmt.Errorf("ningún servidor STUN respondió por %s: %w", family, lastErr)
 }
 
 // bind manda un Binding Request y espera su respuesta, que llega por readLoop.
@@ -230,7 +334,8 @@ func (s *Session) bind(server *net.UDPAddr, timeout time.Duration, attempts int)
 		}
 		select {
 		case resp := <-ch:
-			return stun.ParseBindingResponse(resp, id)
+			ap, err := stun.ParseBindingResponse(resp, id)
+			return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()), err
 		case <-time.After(timeout):
 		case <-s.closeCh:
 			return netip.AddrPort{}, net.ErrClosed
@@ -282,20 +387,23 @@ func (s *Session) handle(body string, from netip.AddrPort) {
 
 	s.mu.Lock()
 	adopted := false
-	switch {
-	case !s.peer.IsValid():
-		// Llegó tráfico antes de que pegáramos la dirección del otro: nuestro NAT
-		// deja entrar paquetes de cualquiera (filtrado abierto). Lo adoptamos y
-		// empezamos a disparar nosotros también para confirmar la vuelta.
-		log.Info("paquete entrante antes de conectar: el NAT tiene filtrado abierto; adoptando peer", "from", from)
-		s.peer = from
-		if !s.punching {
-			s.punching, adopted = true, true
+	if !s.peer.IsValid() {
+		switch {
+		case len(s.remote) == 0:
+			// Llegó tráfico antes de que pegáramos las direcciones del otro: nuestro
+			// NAT deja entrar paquetes de cualquiera (filtrado abierto o puerto UPnP).
+			// Lo adoptamos y disparamos nosotros también para confirmar la vuelta.
+			log.Info("paquete entrante antes de conectar (filtrado abierto o puerto UPnP); adoptando peer", "from", from)
+			if !s.punching {
+				s.punching, adopted = true, true
+			}
+		case !slices.Contains(s.remote, from):
+			// El otro lado aparece desde una dirección que no estaba en su lista: su
+			// NAT usó otro puerto/IP para hablarnos. ICE lo llama "peer reflexive".
+			log.Info("el otro lado llega desde una dirección que no estaba en su lista (peer reflexive)", "from", from)
+		default:
+			log.Info("respondió el candidato", "from", from)
 		}
-	case from != s.peer:
-		// El otro lado aparece desde una dirección distinta a la pegada (su NAT
-		// cambió el puerto). ICE lo llama "peer reflexive candidate".
-		log.Info("el otro lado llega desde otra dirección; la adoptamos", "esperada", s.peer, "real", from)
 		s.peer = from
 	}
 	firstInbound := !s.inbound
@@ -307,7 +415,7 @@ func (s *Session) handle(body string, from netip.AddrPort) {
 		go s.punchLoop()
 	}
 	if firstInbound {
-		log.Info("¡primer paquete del otro lado! su puerta y la nuestra están abiertas en esta dirección", "from", from, "sender", sender)
+		log.Info("¡primer paquete del otro lado!", "from", from, "sender", sender)
 		s.emit(Event{Kind: EvInbound, Addr: from})
 	}
 
@@ -326,6 +434,11 @@ func (s *Session) handle(body string, from netip.AddrPort) {
 		s.lastPong = time.Now()
 		wasConnected := s.connected
 		s.connected = true
+		if s.peer != from {
+			// La ida y vuelta se confirmó por este camino: es el que usamos.
+			log.Info("cambiando al camino confirmado", "antes", s.peer, "ahora", from)
+			s.peer = from
+		}
 		s.mu.Unlock()
 		if !ok {
 			return
@@ -349,28 +462,47 @@ func (s *Session) write(to netip.AddrPort, body string) error {
 	return err
 }
 
+// ping manda un PING a cada destino: solo al peer si ya hay conexión; si no, a
+// todos los candidatos del otro lado (y al peer tentativo, si lo hay).
 func (s *Session) ping() {
 	s.mu.Lock()
-	s.seq++
-	seq, peer := s.seq, s.peer
-	s.sentAt[seq] = time.Now()
+	var targets []netip.AddrPort
+	if s.connected {
+		targets = []netip.AddrPort{s.peer}
+	} else {
+		targets = slices.Clone(s.remote)
+		if s.peer.IsValid() && !slices.Contains(targets, s.peer) {
+			targets = append(targets, s.peer)
+		}
+	}
+	seqs := make([]uint64, len(targets))
+	now := time.Now()
+	for i := range targets {
+		s.seq++
+		seqs[i] = s.seq
+		s.sentAt[s.seq] = now
+	}
 	// No dejamos crecer el mapa con PINGs que nunca tuvieron respuesta.
 	for k := range s.sentAt {
-		if k+64 < seq {
+		if k+256 < s.seq {
 			delete(s.sentAt, k)
 		}
 	}
 	s.mu.Unlock()
-	if err := s.write(peer, fmt.Sprintf("PING %s %d", s.id, seq)); err != nil {
-		logx.For(logx.StagePunch).Warn("no se pudo enviar PING", "err", err)
-		return
+
+	log := logx.For(logx.StagePunch)
+	for i, t := range targets {
+		if err := s.write(t, fmt.Sprintf("PING %s %d", s.id, seqs[i])); err != nil {
+			log.Debug("no se pudo enviar PING", "to", t, "err", err)
+			continue
+		}
+		log.Debug("PING enviado", "to", t, "seq", seqs[i])
 	}
-	logx.For(logx.StagePunch).Debug("PING enviado", "to", peer, "seq", seq)
 }
 
 // --- Bucles ----------------------------------------------------------------
 
-// punchLoop dispara PINGs seguidos hasta conectar o rendirse.
+// punchLoop dispara PINGs seguidos hasta conectar o agotar el disparo rápido.
 func (s *Session) punchLoop() {
 	deadline := time.Now().Add(PunchTimeout)
 	t := time.NewTicker(PunchInterval)
@@ -391,7 +523,7 @@ func (s *Session) punchLoop() {
 			if inbound {
 				reason = "llegan paquetes del otro lado pero los nuestros no le llegan"
 			}
-			logx.For(logx.StagePunch).Warn("✗ hole punching falló", "reason", reason)
+			logx.For(logx.StagePunch).Warn("✗ el disparo rápido no conectó; sigo intentando cada 5 s", "reason", reason)
 			s.emit(Event{Kind: EvFailed, Text: reason})
 			return
 		}
@@ -405,7 +537,7 @@ func (s *Session) punchLoop() {
 }
 
 // maintain mantiene la puerta abierta: refresca STUN mientras esperamos y manda
-// keepalives estando conectados.
+// keepalives (que también siguen intentando conectar tras un disparo fallido).
 func (s *Session) maintain() {
 	log := logx.For(logx.StagePunch)
 	stunT := time.NewTicker(STUNRefresh)
@@ -418,7 +550,7 @@ func (s *Session) maintain() {
 			return
 		case <-stunT.C:
 			s.mu.Lock()
-			server, waiting, old := s.stunServer, !s.punching && !s.connected, s.public
+			server, waiting := s.stunServer, !s.punching && !s.connected
 			s.mu.Unlock()
 			if server == nil || !waiting {
 				continue
@@ -429,32 +561,33 @@ func (s *Session) maintain() {
 				continue
 			}
 			log.Debug("refresco STUN (mantiene la puerta abierta)", "public", mapped)
-			if mapped != old {
-				s.mu.Lock()
-				s.public = mapped
-				s.mu.Unlock()
+			s.mu.Lock()
+			var old netip.AddrPort
+			changed := false
+			if len(s.cands) > 0 && strings.HasPrefix(s.cands[0].Kind, CandSTUN) && s.cands[0].Addr != mapped {
+				old, changed = s.cands[0].Addr, true
+				s.cands[0].Addr = mapped
+			}
+			s.mu.Unlock()
+			if changed {
 				log.Warn("la dirección pública cambió: vuelve a pasársela al otro lado", "antes", old, "ahora", mapped)
-				s.emit(Event{Kind: EvPublic, Addr: mapped})
+				s.emit(Event{Kind: EvPublic, Text: s.CandidatesString()})
 			}
 		case <-kaT.C:
 			s.mu.Lock()
-			connected, lastPong := s.connected, s.lastPong
-			if connected && time.Since(lastPong) > LostAfter {
+			lastPong := s.lastPong
+			lost := s.connected && time.Since(lastPong) > LostAfter
+			if lost {
 				s.connected = false
-				connected = false
+				s.lastPong = time.Time{}
 			}
+			active := s.peer.IsValid() || len(s.remote) > 0
 			s.mu.Unlock()
-			if !connected && !lastPong.IsZero() && time.Since(lastPong) > LostAfter {
+			if lost {
 				log.Warn("conexión perdida: sin respuesta del otro lado", "silencio", time.Since(lastPong).Round(time.Second))
 				s.emit(Event{Kind: EvLost})
-				s.mu.Lock()
-				s.lastPong = time.Time{} // avisar una sola vez
-				s.mu.Unlock()
 			}
-			s.mu.Lock()
-			peer := s.peer
-			s.mu.Unlock()
-			if peer.IsValid() {
+			if active {
 				s.ping() // si vuelve un PONG, handle() marca conectado otra vez
 			}
 		}

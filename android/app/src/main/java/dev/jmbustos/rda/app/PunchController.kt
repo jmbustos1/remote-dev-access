@@ -17,8 +17,8 @@ data class ChatLine(val mine: Boolean, val text: String)
 
 data class PunchState(
     val phase: PunchPhase = PunchPhase.Idle,
-    val public: String = "",
-    val local: String = "",
+    val candidates: String = "",       // línea para copiar
+    val candidatesDetail: String = "", // "tipo dirección" por línea
     val peer: String = "",
     val rttMs: Long = 0,
     val error: String? = null,
@@ -43,7 +43,9 @@ object PunchController : PunchListener {
             runCatching { Mobile.openPunchSession(this@PunchController) }
                 .onSuccess { s ->
                     session = s
-                    _state.update { it.copy(phase = PunchPhase.Waiting, public = s.publicAddr(), local = s.localAddr()) }
+                    _state.update {
+                        it.copy(phase = PunchPhase.Waiting, candidates = s.candidates(), candidatesDetail = s.candidatesDetail())
+                    }
                 }
                 .onFailure { e ->
                     _state.update { it.copy(phase = PunchPhase.Failed, error = e.message) }
@@ -78,7 +80,7 @@ object PunchController : PunchListener {
     override fun onPunchEvent(kind: String, addr: String, rttMs: Long, text: String) {
         _state.update {
             when (kind) {
-                "public" -> it.copy(public = addr)
+                "public" -> it.copy(candidates = text, candidatesDetail = session?.candidatesDetail() ?: it.candidatesDetail)
                 "punching" -> it.copy(phase = PunchPhase.Punching, peer = addr)
                 "inbound" -> it.copy(phase = PunchPhase.Inbound, peer = addr)
                 "connected" -> it.copy(phase = PunchPhase.Connected, peer = addr, rttMs = rttMs, error = null)

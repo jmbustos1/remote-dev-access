@@ -2,6 +2,8 @@ module github.com/jmbustos1/remote-dev-access
 
 go 1.26.0
 
+require github.com/huin/goupnp v1.3.0
+
 require (
 	golang.org/x/mobile v0.0.0-20261011034528-197770444867 // indirect
 	golang.org/x/mod v0.42.0 // indirect

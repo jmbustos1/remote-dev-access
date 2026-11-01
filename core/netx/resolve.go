@@ -28,6 +28,11 @@ var resolver = func() *net.Resolver {
 
 // ResolveUDP4 resuelve "host:puerto" a una dirección UDP IPv4.
 func ResolveUDP4(ctx context.Context, hostport string) (*net.UDPAddr, error) {
+	return ResolveUDP(ctx, hostport, "ip4")
+}
+
+// ResolveUDP resuelve "host:puerto" para la familia dada ("ip4" o "ip6").
+func ResolveUDP(ctx context.Context, hostport, family string) (*net.UDPAddr, error) {
 	host, port, err := net.SplitHostPort(hostport)
 	if err != nil {
 		return nil, err
@@ -36,12 +41,12 @@ func ResolveUDP4(ctx context.Context, hostport string) (*net.UDPAddr, error) {
 	if err != nil {
 		return nil, err
 	}
-	ips, err := resolver.LookupIP(ctx, "ip4", host)
+	ips, err := resolver.LookupIP(ctx, family, host)
 	if err != nil {
 		return nil, err
 	}
 	if len(ips) == 0 {
-		return nil, fmt.Errorf("%s no tiene IPv4", host)
+		return nil, fmt.Errorf("%s no tiene direcciones %s", host, family)
 	}
 	return &net.UDPAddr{IP: ips[0], Port: p}, nil
 }

@@ -16,7 +16,7 @@ import (
 var DefaultServers = []string{
 	"stun.l.google.com:19302",
 	"stun.cloudflare.com:3478",
-	"stun1.l.google.com:19302",
+	"global.stun.twilio.com:3478",
 }
 
 // Result es lo que respondió un servidor.
@@ -55,6 +55,9 @@ type Report struct {
 	Local   netip.AddrPort
 	Results []Result
 	Kind    NATKind
+	// IPv6: mismas consultas por IPv6 (vacío si la red no tiene IPv6). Si la
+	// dirección mapeada es la propia del equipo, no hay NAT en el camino.
+	IPv6 []Result
 }
 
 // Probe abre un socket UDP en localPort (0 = cualquiera), consulta a todos los
@@ -92,7 +95,37 @@ func Probe(ctx context.Context, servers []string, localPort int, timeout time.Du
 	}
 	rep.Kind = classify(rep)
 	log.Info("clasificación NAT", "kind", rep.Kind.String())
+
+	if c6, err := net.ListenUDP("udp6", &net.UDPAddr{}); err != nil {
+		log.Info("sin socket IPv6", "err", err)
+	} else {
+		defer c6.Close()
+		for _, s := range servers {
+			addr, err := netx.ResolveUDP(ctx, s, "ip6")
+			if err != nil {
+				continue // el servidor no tiene IPv6
+			}
+			r := Result{Server: s, Resolved: addr.String()}
+			r.Mapped, r.RTT, r.Err = Query(c6, addr, timeout, 2)
+			if r.Err != nil {
+				log.Debug("sin respuesta IPv6", "server", s, "err", r.Err)
+			} else {
+				log.Info("IPv6 pública", "server", s, "mapped", r.Mapped)
+			}
+			rep.IPv6 = append(rep.IPv6, r)
+		}
+	}
 	return rep, nil
+}
+
+// HasIPv6 dice si al menos un servidor respondió por IPv6.
+func (r *Report) HasIPv6() bool {
+	for _, x := range r.IPv6 {
+		if x.Err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func classify(rep *Report) NATKind {

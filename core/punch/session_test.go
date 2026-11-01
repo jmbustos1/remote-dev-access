@@ -2,6 +2,7 @@ package punch
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/netip"
 	"testing"
@@ -88,6 +89,60 @@ func TestOneSidedConnectAdoptsPeer(t *testing.T) {
 	}
 	if e := waitFor(t, aev, EvMessage); e.Text != "te encontré" {
 		t.Errorf("mensaje = %q", e.Text)
+	}
+}
+
+// Con varios candidatos, uno muerto no impide conectar por otro (mini ICE).
+func TestConnectsThroughSecondCandidate(t *testing.T) {
+	a, aev := open(t)
+	b, bev := open(t)
+	dead, _ := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	deadAddr := dead.LocalAddr().String()
+	dead.Close()
+
+	if err := a.Connect(deadAddr + " " + loopback(b)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Connect(loopback(a) + ", " + deadAddr); err != nil {
+		t.Fatal(err)
+	}
+	if e := waitFor(t, aev, EvConnected); e.Addr.String() != loopback(b) {
+		t.Errorf("a conectó por %s, quiero %s", e.Addr, loopback(b))
+	}
+	waitFor(t, bev, EvConnected)
+}
+
+func TestIPv6Loopback(t *testing.T) {
+	if c, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback}); err != nil {
+		t.Skip("sin IPv6 en esta máquina")
+	} else {
+		c.Close()
+	}
+	a, aev := open(t)
+	b, bev := open(t)
+	v6 := func(s *Session) string { return fmt.Sprintf("[::1]:%d", s.Local().Port()) }
+	if err := a.Connect(v6(b)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Connect(v6(a)); err != nil {
+		t.Fatal(err)
+	}
+	if e := waitFor(t, aev, EvConnected); !e.Addr.Addr().Is6() {
+		t.Errorf("conectó por %s, quería IPv6", e.Addr)
+	}
+	waitFor(t, bev, EvConnected)
+}
+
+func TestParseCandidates(t *testing.T) {
+	got, err := ParseCandidates("203.0.113.7:33792 [2001:db8::1]:33792,\n192.168.1.20:33792")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || !got[1].Addr().Is6() {
+		t.Errorf("got %v", got)
+	}
+	if _, err := ParseCandidates("hola"); err == nil {
+		t.Error("aceptó basura")
 	}
 }
 

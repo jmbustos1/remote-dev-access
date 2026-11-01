@@ -41,6 +41,7 @@ private data class StunUi(
     val nat: String,
     val rows: List<String>,
     val symmetric: Boolean,
+    val ipv6: List<String>,
 )
 
 @Composable
@@ -94,7 +95,13 @@ fun TestsScreen(modifier: Modifier = Modifier) {
                     Text("Socket local: ${r.local}", fontFamily = FontFamily.Monospace)
                     r.rows.forEach { Text(it, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
                     Text(
-                        "NAT: ${r.nat}",
+                        if (r.ipv6.isEmpty()) "IPv6: no disponible en esta red"
+                        else "IPv6: disponible (sin NAT)",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    r.ipv6.forEach { Text(it, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+                    Text(
+                        "NAT IPv4: ${r.nat}",
                         style = MaterialTheme.typography.titleMedium,
                         color = if (r.symmetric) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     )
@@ -116,7 +123,13 @@ private fun parse(network: String, json: String): StunUi {
         else "✓ $server\n   ${r.getString("mapped")} (${r.getLong("rtt_ms")} ms)"
     }
     val nat = o.getString("nat")
-    return StunUi(network, o.getString("local"), nat, rows, nat.startsWith("NAT simétrico"))
+    val v6 = o.optJSONArray("ipv6")
+    val ipv6 = (0 until (v6?.length() ?: 0)).mapNotNull { i ->
+        val r = v6!!.getJSONObject(i)
+        if (r.has("error")) null else "✓ ${r.getString("server")}\n   ${r.getString("mapped")}"
+    }
+    LogStore.app("INFO", "resultado STUN", "red=$network nat=\"$nat\" ipv6=${if (ipv6.isEmpty()) "no" else "sí"}")
+    return StunUi(network, o.getString("local"), nat, rows, nat.startsWith("NAT simétrico"), ipv6)
 }
 
 private fun networkType(context: Context): String {

@@ -78,6 +78,15 @@ Cada fase termina en algo probable por sí solo.
 - **Hecho cuando:** llega el "hola" PC ⇄ celular por **wifi y por 4G**. Registrar resultado
   del NAT 4G en `docs/` (define cuánto se usará el relay).
 
+### Fase 2b — Candidatos: IPv6 y UPnP
+- Resultado de la fase 2: en 4G (CGNAT) el camino celular → PC se pierde: el CGNAT sale con otro
+  puerto/IP y el router de la casa lo descarta. PC → celular sí funciona.
+- Socket dual-stack; candidatos `stun` (IPv4), `upnp` (puerto reenviado por el router de la casa),
+  `ipv6` (sin NAT) y `local`. Se dispara a todos los candidatos del otro lado y gana el primero
+  que completa ida y vuelta (mini ICE). Aceptar direcciones "peer reflexive".
+- Tras el disparo rápido, el keepalive sigue intentando (el "falló" deja de ser definitivo).
+- **Hecho cuando:** PC (casa) ⇄ celular (4G) conectan por `upnp` o por `ipv6`.
+
 ### Fase 3 — Señalización
 - Terraform: API Gateway WebSocket (`$connect`, `$disconnect`, `register`, `connect`, `signal`),
   Lambda en Go (`provided.al2023`, arm64), DynamoDB on-demand (`device_id → connection_id`).

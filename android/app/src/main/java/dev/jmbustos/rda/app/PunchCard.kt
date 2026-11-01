@@ -37,7 +37,7 @@ fun PunchCard() {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Hole punching", style = MaterialTheme.typography.titleLarge)
             Text(
-                "1) Inicia y pasa tu dirección al PC (rda punch).  2) Pega aquí la del PC.  3) Ambos disparan hasta abrir la puerta.",
+                "1) En el PC: rda punch.  2) Aquí: Iniciar.  3) Pega la línea del PC y Conectar (si el PC tiene UPnP no hace falta pegarle la tuya).  Copia y pega sin salir de la app si puedes.",
                 style = MaterialTheme.typography.bodyMedium,
             )
 
@@ -49,24 +49,19 @@ fun PunchCard() {
             Text(statusText(st), fontWeight = FontWeight.Bold, color = statusColor(st.phase))
             st.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 
-            if (st.public.isNotEmpty()) {
+            if (st.candidates.isNotEmpty()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Tu dirección: ${st.public}", fontFamily = FontFamily.Monospace, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { clipboard.setText(AnnotatedString(st.public)) }) { Text("Copiar") }
+                    Text("Tus candidatos", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { clipboard.setText(AnnotatedString(st.candidates)) }) { Text("Copiar línea") }
                 }
-                Text(
-                    "Misma red local: ${st.local}",
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                Text(st.candidatesDetail, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
             }
 
             if (st.phase == PunchPhase.Waiting || st.phase == PunchPhase.Failed) {
                 OutlinedTextField(
                     value = peer,
                     onValueChange = { peer = it },
-                    label = { Text("Dirección del PC (ip:puerto)") },
-                    singleLine = true,
+                    label = { Text("Línea de candidatos del PC") },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -113,7 +108,7 @@ private fun statusText(st: PunchState) = when (st.phase) {
     PunchPhase.Inbound -> "Llegan paquetes de ${st.peer}, confirmando la vuelta…"
     PunchPhase.Connected -> "✓ Conectado directo con ${st.peer} — RTT ${st.rttMs} ms"
     PunchPhase.Lost -> "✗ Conexión perdida, reintentando…"
-    PunchPhase.Failed -> "✗ No se pudo conectar"
+    PunchPhase.Failed -> "✗ El disparo rápido no conectó (sigo intentando cada 5 s)"
 }
 
 @Composable

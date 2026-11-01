@@ -69,6 +69,17 @@ func cmdSTUN(args []string) int {
 		fmt.Printf("  %-28s  te ve como %-22s (%s)\n", r.Server, r.Mapped, r.RTT.Round(time.Millisecond))
 	}
 	fmt.Printf("\nNAT: %s\n", rep.Kind)
+	if rep.HasIPv6() {
+		fmt.Println("\nIPv6:")
+		for _, r := range rep.IPv6 {
+			if r.Err == nil {
+				fmt.Printf("  %-28s  te ve como %s\n", r.Server, r.Mapped)
+			}
+		}
+		fmt.Println("  → hay IPv6: sin NAT de por medio, el hole punching por IPv6 debería funcionar")
+	} else {
+		fmt.Println("\nIPv6: no disponible en esta red")
+	}
 	if ok == 0 {
 		return 1
 	}
