@@ -101,10 +101,8 @@ fun TestsScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
-        Text(
-            "Próximas pruebas: hole punching (fase 2), señalización (fase 3).",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        PunchCard()
+        Text("Próxima prueba: señalización (fase 3).", style = MaterialTheme.typography.bodySmall)
     }
 }
 

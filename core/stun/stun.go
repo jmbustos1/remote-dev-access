@@ -60,6 +60,19 @@ func NewBindingRequest() (TxID, []byte, error) {
 	return id, msg, nil
 }
 
+// IsMessage dice si un paquete parece STUN: los 2 primeros bits en cero y el
+// magic cookie en su lugar. Permite compartir un socket con otros protocolos.
+func IsMessage(b []byte) bool {
+	return len(b) >= headerSize && b[0]&0xC0 == 0 && binary.BigEndian.Uint32(b[4:8]) == magicCookie
+}
+
+// TransactionID extrae el ID de un mensaje STUN (asume IsMessage).
+func TransactionID(b []byte) TxID {
+	var id TxID
+	copy(id[:], b[8:20])
+	return id
+}
+
 // ParseBindingResponse valida la respuesta y extrae la dirección pública.
 func ParseBindingResponse(msg []byte, want TxID) (netip.AddrPort, error) {
 	if len(msg) < headerSize {

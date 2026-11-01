@@ -17,3 +17,12 @@ es solo la mitad; el filtrado de cada NAT recién se prueba con el punching real
 Observación: el router de la casa conserva el puerto local (48957 → 48957). No todos los NAT
 hacen eso; lo importante para el hole punching es que el puerto público sea el mismo hacia
 destinos distintos.
+
+## Fase 2 — Hole punching manual
+
+PC con `rda punch -v`, celular con la APK (Pruebas → Hole punching).
+
+| Fecha | PC | Celular | Resultado | RTT |
+|---|---|---|---|---|
+| | wifi casa | 4G | pendiente | |
+| | wifi casa | wifi casa | pendiente (necesita hairpinning del router o usar la dirección local) | |

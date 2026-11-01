@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"os"
 	"time"
 )
@@ -43,4 +44,17 @@ func ResolveUDP4(ctx context.Context, hostport string) (*net.UDPAddr, error) {
 		return nil, fmt.Errorf("%s no tiene IPv4", host)
 	}
 	return &net.UDPAddr{IP: ips[0], Port: p}, nil
+}
+
+// LocalAddr devuelve la IP local real (la de la interfaz con salida a internet,
+// no 0.0.0.0) junto al puerto dado. Sirve para detectar si estamos sin NAT y
+// para ofrecer la dirección de red local cuando ambos lados están en el mismo wifi.
+func LocalAddr(port uint16) netip.AddrPort {
+	c, err := net.Dial("udp4", "8.8.8.8:53") // no envía nada, solo elige la ruta
+	if err != nil {
+		return netip.AddrPortFrom(netip.IPv4Unspecified(), port)
+	}
+	defer c.Close()
+	ip, _ := netip.AddrFromSlice(c.LocalAddr().(*net.UDPAddr).IP.To4())
+	return netip.AddrPortFrom(ip, port)
 }

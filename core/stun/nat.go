@@ -68,7 +68,7 @@ func Probe(ctx context.Context, servers []string, localPort int, timeout time.Du
 	}
 	defer conn.Close()
 
-	rep := &Report{Local: localAddr(conn)}
+	rep := &Report{Local: netx.LocalAddr(uint16(conn.LocalAddr().(*net.UDPAddr).Port))}
 	log.Debug("socket abierto", "local", rep.Local)
 
 	for _, s := range servers {
@@ -120,17 +120,4 @@ func classify(rep *Report) NATKind {
 		}
 	}
 	return NATEndpointInd
-}
-
-// localAddr devuelve la IP local real (la de la interfaz con salida a internet),
-// no 0.0.0.0, para poder detectar si estamos sin NAT.
-func localAddr(conn *net.UDPConn) netip.AddrPort {
-	port := uint16(conn.LocalAddr().(*net.UDPAddr).Port)
-	c, err := net.Dial("udp4", "8.8.8.8:53") // no envía nada, solo elige la ruta
-	if err != nil {
-		return netip.AddrPortFrom(netip.IPv4Unspecified(), port)
-	}
-	defer c.Close()
-	ip, _ := netip.AddrFromSlice(c.LocalAddr().(*net.UDPAddr).IP.To4())
-	return netip.AddrPortFrom(ip, port)
 }
