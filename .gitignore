@@ -1,0 +1,23 @@
+# Go
+/bin/
+*.exe
+
+# Terraform
+.terraform/
+terraform.tfstate*
+terraform.tfvars
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.aar
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Secretos
+*.pem
+.env
