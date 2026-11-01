@@ -1,0 +1,46 @@
+// Package netx agrupa utilidades de red compartidas.
+package netx
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"time"
+)
+
+// resolver usa el del sistema, salvo que no exista /etc/resolv.conf (Android /
+// Termux con binario Go puro): ahí el resolver de Go no sabe a quién preguntar,
+// así que forzamos un DNS público.
+var resolver = func() *net.Resolver {
+	if _, err := os.Stat("/etc/resolv.conf"); err == nil {
+		return net.DefaultResolver
+	}
+	return &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 3 * time.Second}
+			return d.DialContext(ctx, network, "1.1.1.1:53")
+		},
+	}
+}()
+
+// ResolveUDP4 resuelve "host:puerto" a una dirección UDP IPv4.
+func ResolveUDP4(ctx context.Context, hostport string) (*net.UDPAddr, error) {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return nil, err
+	}
+	p, err := net.DefaultResolver.LookupPort(ctx, "udp", port)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := resolver.LookupIP(ctx, "ip4", host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("%s no tiene IPv4", host)
+	}
+	return &net.UDPAddr{IP: ips[0], Port: p}, nil
+}
