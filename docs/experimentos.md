@@ -24,5 +24,14 @@ PC con `rda punch -v`, celular con la APK (Pruebas → Hole punching).
 
 | Fecha | PC | Celular | Resultado | RTT |
 |---|---|---|---|---|
-| | wifi casa | 4G | pendiente | |
+| 2026-11-01 | wifi casa | 4G (CGNAT, IP local 10.x) | ✗ 3 intentos: PC → celular llega, celular → PC no | — |
 | | wifi casa | wifi casa | pendiente (necesita hairpinning del router o usar la dirección local) | |
+
+Observaciones (2026-11-01):
+- En 4G la IP pública cambió entre sesiones (dos IPs distintas del mismo bloque): CGNAT con un pool de IPs.
+- Hipótesis: hacia el PC, el CGNAT sale con otro puerto/IP que el que vio el STUN, y el router de
+  la casa solo deja entrar respuestas desde el ip:puerto exacto al que escribió el PC → descarta.
+  El CGNAT, en cambio, deja entrar al PC por el mapeo que abrió el STUN (filtrado laxo).
+- `sendto: operation not permitted` en el celular: probablemente Android bloqueando red con la
+  app en segundo plano (mientras se copiaban direcciones en otra app). Por confirmar.
+- Router de la casa: MiniUPnPd 1.9 responde (UPnP IGD); NAT-PMP no. El PC tiene IPv6 global.
