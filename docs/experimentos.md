@@ -83,3 +83,9 @@ Observaciones APK (2026-11-01):
   ni "conexión perdida" (en la fase 2b la red se cortaba a los ~8 s).
 - Pendiente: repetir el bloqueo largo con Debug activado (para ver los keepalive) y probar en
   otros fabricantes con optimización de batería agresiva.
+
+## Fase 4 — Terminal
+
+| Fecha | Prueba | Resultado |
+|---|---|---|
+| 2026-11-02 | APK 3632e45 (Redmi 9) → pc-casa: terminal → tmux → Claude Code | ✅ **primer hito usable**: el usuario le escribió a Claude Code desde el celular |
