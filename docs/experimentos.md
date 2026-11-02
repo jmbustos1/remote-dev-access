@@ -60,3 +60,17 @@ Observaciones (2026-11-01, prueba exitosa):
 Conclusiones:
 - PCs de la casa: UPnP resuelve el CGNAT simétrico del celular → conexión directa, sin relay.
 - PC del trabajo (sin UPnP) + 4G simétrico: casi seguro necesitará el relay (fase 5).
+
+## Fase 3 — Señalización en AWS
+
+Desplegada 2026-11-01 (16 recursos, cuenta personal, us-east-1). Dispositivos registrados:
+`pc-casa` (pc) y `celular` (phone); tokens en `~/.config/rda/` (600), en la tabla solo el hash.
+
+| Fecha | Prueba | Resultado |
+|---|---|---|
+| 2026-11-01 | `rda-agent` (pc-casa) + `rda connect` (celular) desde el mismo PC | ✅ conectado en 3,1 s vía señalización AWS, eco OK |
+| 2026-11-01 | token inválido | ✅ rechazado en `$connect` |
+| | celular (APK) en 4G → pc-casa | pendiente (falta el lado APK) |
+
+Observación: el primer minuto tras el `apply`, las conexiones del agente recibían 403 sin llegar
+a la Lambda (probablemente propagación de la API recién creada); un minuto después, todo normal.

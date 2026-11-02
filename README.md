@@ -4,7 +4,7 @@ Terminal desde el celular hacia mis PCs detrás de NAT, vía P2P (WebRTC + hole 
 señalización serverless en AWS y relay de respaldo bajo demanda. Pensado para retomar sesiones de
 Claude Code que viven en `tmux`.
 
-Estado: fase 2 (hole punching manual). Ver [PLAN.md](PLAN.md) y [docs/experimentos.md](docs/experimentos.md).
+Estado: fase 3 (señalización en AWS; falta el lado APK). Ver [PLAN.md](PLAN.md) y [docs/experimentos.md](docs/experimentos.md).
 
 ## Uso
 
