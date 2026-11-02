@@ -44,4 +44,19 @@ Observaciones (2026-11-01):
 
 | Fecha | PC | Celular | Camino ganador | RTT |
 |---|---|---|---|---|
-| | wifi casa (UPnP + IPv6) | 4G | pendiente | |
+| 2026-11-01 | wifi casa (UPnP + IPv6) | 4G (sin IPv6, NAT simétrico) | ✅ `stun+upnp` (IPv4 vía puerto reenviado), chat en ambos sentidos | ~40 ms (picos 190 ms) |
+
+Observaciones (2026-11-01, prueba exitosa):
+- El celular conectó ~1 s después de tocar Conectar; el PC no necesitó la línea del celular:
+  recibió "paquete entrante antes de conectar" gracias al puerto UPnP y respondió a la dirección real.
+- En 4G la prueba STUN dio **NAT simétrico** esta vez: confirma por qué falló la fase 2 sin UPnP.
+- La compañía móvil **no entrega IPv6** (el error "no such host" de Twilio es solo el último intento;
+  Google y Cloudflare tampoco respondieron por IPv6).
+- **Android corta la red de la app en segundo plano:** "app en segundo plano" 20:59:09.9 →
+  `sendto: operation not permitted` 20:59:18.5 → "primer plano" 20:59:18.6. En el PC se vio como
+  "conexión perdida" (21:00:22) y reconexión sola por keepalive al volver la app (21:00:32).
+  → Para la terminal hará falta un *foreground service* mientras haya sesión.
+
+Conclusiones:
+- PCs de la casa: UPnP resuelve el CGNAT simétrico del celular → conexión directa, sin relay.
+- PC del trabajo (sin UPnP) + 4G simétrico: casi seguro necesitará el relay (fase 5).

@@ -85,7 +85,8 @@ Cada fase termina en algo probable por sí solo.
   `ipv6` (sin NAT) y `local`. Se dispara a todos los candidatos del otro lado y gana el primero
   que completa ida y vuelta (mini ICE). Aceptar direcciones "peer reflexive".
 - Tras el disparo rápido, el keepalive sigue intentando (el "falló" deja de ser definitivo).
-- **Hecho cuando:** PC (casa) ⇄ celular (4G) conectan por `upnp` o por `ipv6`.
+- **Hecho cuando:** PC (casa) ⇄ celular (4G) conectan por `upnp` o por `ipv6`. ✅ 2026-11-01 por
+  `upnp` (~40 ms). La red móvil no tiene IPv6.
 
 ### Fase 3 — Señalización
 - Terraform: API Gateway WebSocket (`$connect`, `$disconnect`, `register`, `connect`, `signal`),
@@ -127,7 +128,8 @@ Cada fase termina en algo probable por sí solo.
     "copiar llave pública" para agregarla a `authorized_keys` de cada PC.
   - v1: carga manual (pegar). v2 (fase 7): emparejamiento por QR con `rda-agent pair`.
   - Opcional: huella/PIN al abrir la app.
-- Keepalive solo con la app en primer plano.
+- **Foreground service** (notificación "Conectado a pc-casa") mientras haya sesión: Android corta
+  la red de la app a los ~8 s en segundo plano (visto en la fase 2b). Sin sesión, nada corre.
 - **Distribución:** APK de release subida a Google Drive y descargada en el celular (sideload).
   - Keystore de release propio desde el día 1 (las actualizaciones exigen la misma firma).
     Fuera de git, con respaldo: perderlo obliga a desinstalar para actualizar.
