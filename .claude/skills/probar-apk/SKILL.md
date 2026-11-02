@@ -44,6 +44,17 @@ teclado en pantalla**: no detecta problemas del IME. Para eso:
 Prueba mínima: escribir `seq 1 5` + Enter de Gboard (deben salir 1..5), borrar una
 letra, y Ctrl (barra) + c → `^C`.
 
+## Probar el scroll táctil
+
+```
+tmux send-keys -t rda-test 'seq 1 200' Enter          # historial
+adb -s emulator-5560 shell input swipe 540 700 540 1700 600   # dedo hacia abajo
+tmux display -p -t rda-test '#{pane_in_mode} #{scroll_position}'   # → "1 <n>": modo copia
+adb -s emulator-5560 shell input swipe 540 1700 540 400 400   # dedo hacia arriba (repetir)
+tmux display -p -t rda-test '#{pane_in_mode}'                   # → "0": volvió al final
+```
+Luego un toque simple debe seguir abriendo el teclado (`size` → ~50×25).
+
 ## Reglas
 
 - **No usar el emulador que el usuario tenga abierto** (suele ser `Medium_Phone_API_36.1`

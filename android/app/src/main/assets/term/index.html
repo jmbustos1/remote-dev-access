@@ -66,6 +66,37 @@
   new ResizeObserver(schedule).observe(document.getElementById('term'));
   window.addEventListener('resize', schedule);
 
+  // Scroll con el dedo: xterm.js no lo trae en pantallas táctiles, pero sí sabe
+  // qué hacer con la rueda del mouse (con tmux `mouse on` le manda la rueda y
+  // tmux entra al modo copia; sin tmux recorre el historial). Traducimos el
+  // deslizamiento a eventos de rueda. Arrastrar hacia abajo = ver lo anterior.
+  const screenEl = document.querySelector('.xterm-screen');
+  const touchEl = document.getElementById('term');
+  const LINES_PER_WHEEL = 3; // tmux mueve 5 líneas por evento: uno cada 3 líneas de dedo (~1,5×)
+  let lastY = null, acc = 0, scrolling = false;
+  touchEl.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) { lastY = null; return; }
+    lastY = e.touches[0].clientY; acc = 0; scrolling = false;
+  }, { passive: true });
+  touchEl.addEventListener('touchmove', e => {
+    if (lastY === null) return;
+    const t = e.touches[0];
+    acc += lastY - t.clientY; // > 0: el dedo sube → avanzar hacia lo más nuevo
+    lastY = t.clientY;
+    const step = (touchEl.clientHeight / term.rows) * LINES_PER_WHEEL;
+    while (Math.abs(acc) >= step) {
+      const dir = acc > 0 ? 1 : -1;
+      acc -= dir * step;
+      scrolling = true;
+      screenEl.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: dir, deltaMode: WheelEvent.DOM_DELTA_LINE,
+        clientX: t.clientX, clientY: t.clientY, bubbles: true, cancelable: true,
+      }));
+    }
+    if (scrolling) e.preventDefault(); // que no lo tome además como selección
+  }, { passive: false });
+  touchEl.addEventListener('touchend', () => { lastY = null; }, { passive: true });
+
   window.rdaWrite = b64 => {
     const bin = atob(b64);
     const bytes = new Uint8Array(bin.length);
