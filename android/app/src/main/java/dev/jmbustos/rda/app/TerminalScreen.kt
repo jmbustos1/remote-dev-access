@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
@@ -47,7 +46,9 @@ fun TerminalScreen() {
     BackHandler { TerminalController.hide() } // atrás = minimizar; la sesión sigue
 
     Column(
-        Modifier.background(Color(0xFF1E1E1E)).safeDrawingPadding().imePadding(),
+        // safeDrawingPadding ya incluye el teclado (IME): sumarle imePadding restaba
+        // su altura dos veces y la terminal quedaba de 1 fila.
+        Modifier.background(Color(0xFF1E1E1E)).safeDrawingPadding(),
     ) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { TerminalController.hide() }) { Text("‹ PCs") }

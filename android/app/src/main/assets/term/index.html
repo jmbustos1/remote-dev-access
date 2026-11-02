@@ -2,7 +2,7 @@
 <!--
   Terminal de la APK: xterm.js (el mismo emulador que usa la terminal de VS Code).
   Puente con Kotlin:
-    JS → Kotlin  RDA.input(texto) · RDA.resize(cols, filas) · RDA.ready(cols, filas) · RDA.ctrlUsed()
+    JS → Kotlin  RDA.input(texto) · RDA.resize(cols, filas, ancho, alto) · RDA.ready(cols, filas) · RDA.ctrlUsed()
     Kotlin → JS  rdaWrite(base64) · rdaCtrl(bool) · rdaFont(px) · rdaFocus() · rdaReset()
 -->
 <html>
@@ -50,11 +50,21 @@
 
   let last = '';
   function refit() {
+    // Durante animaciones (teclado apareciendo) el contenedor pasa por tamaños
+    // transitorios: un tamaño absurdo no se le informa al PC.
+    const dims = fit.proposeDimensions();
+    if (!dims || dims.cols < 10 || dims.rows < 3) return;
     try { fit.fit(); } catch (e) { return; }
     const now = term.cols + 'x' + term.rows;
-    if (now !== last) { last = now; RDA.resize(term.cols, term.rows); }
+    if (now !== last) {
+      last = now;
+      RDA.resize(term.cols, term.rows, window.innerWidth, window.innerHeight);
+    }
   }
-  new ResizeObserver(refit).observe(document.getElementById('term'));
+  let pending = 0;
+  const schedule = () => { clearTimeout(pending); pending = setTimeout(refit, 100); };
+  new ResizeObserver(schedule).observe(document.getElementById('term'));
+  window.addEventListener('resize', schedule);
 
   window.rdaWrite = b64 => {
     const bin = atob(b64);

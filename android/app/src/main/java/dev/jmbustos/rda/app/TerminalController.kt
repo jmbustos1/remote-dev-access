@@ -198,6 +198,7 @@ object TerminalController : TerminalListener {
         @JavascriptInterface
         fun ready(c: Int, r: Int) {
             cols = c; rows = r
+            LogStore.app("DEBUG", "xterm.js listo", "cols=$c filas=$r")
             main.post {
                 pageReady = true
                 webView?.evaluateJavascript("rdaFont(${_state.value.fontSize})", null)
@@ -209,8 +210,9 @@ object TerminalController : TerminalListener {
         fun input(data: String) = send(data.toByteArray())
 
         @JavascriptInterface
-        fun resize(c: Int, r: Int) {
+        fun resize(c: Int, r: Int, w: Int, h: Int) {
             cols = c; rows = r
+            LogStore.app("DEBUG", "tamaño de terminal", "cols=$c filas=$r vista=${w}x${h}px")
             val t = terminal ?: return
             io.execute { runCatching { t.resize(c.toLong(), r.toLong()) } }
         }
