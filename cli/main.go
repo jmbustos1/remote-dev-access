@@ -20,6 +20,10 @@ const usage = `rda — cliente de remote-dev-access
 Uso:
   rda stun [flags]    pregunta a servidores STUN cómo te ve internet
   rda punch [flags]   hole punching manual + mini chat P2P
+  rda devices         lista los dispositivos de la señalización
+  rda connect <pc>    conecta con un PC vía señalización + chat
+  rda token           genera un token de dispositivo y su hash
+  rda signal-local    servidor de señalización en memoria (desarrollo)
   rda version
 
 Ejecuta "rda <comando> -h" para ver los flags.
@@ -35,6 +39,14 @@ func main() {
 		os.Exit(cmdSTUN(os.Args[2:]))
 	case "punch":
 		os.Exit(cmdPunch(os.Args[2:]))
+	case "devices":
+		os.Exit(cmdDevices(os.Args[2:]))
+	case "connect":
+		os.Exit(cmdConnect(os.Args[2:]))
+	case "token":
+		os.Exit(cmdToken(os.Args[2:]))
+	case "signal-local":
+		os.Exit(cmdSignalLocal(os.Args[2:]))
 	case "version":
 		fmt.Println(version)
 	default:

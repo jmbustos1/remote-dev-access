@@ -246,9 +246,17 @@ func (s *Session) Connect(candidates string) error {
 		return err
 	}
 	s.mu.Lock()
-	if s.punching {
+	if s.punching || s.connected {
+		// Ya hay un intento en curso (p. ej. el otro lado nos alcanzó antes de que
+		// llegaran sus candidatos y lo adoptamos): sumamos los candidatos a ese intento.
+		for _, r := range remote {
+			if !slices.Contains(s.remote, r) {
+				s.remote = append(s.remote, r)
+			}
+		}
 		s.mu.Unlock()
-		return errors.New("ya se está conectando")
+		logx.For(logx.StagePunch).Info("candidatos sumados al intento en curso", "candidatos", candidates)
+		return nil
 	}
 	s.remote, s.punching = remote, true
 	s.mu.Unlock()
