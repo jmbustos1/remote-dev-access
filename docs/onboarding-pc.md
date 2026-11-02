@@ -5,6 +5,18 @@ Por ahora el agente se arranca a mano en una terminal (sin systemd/launchd).
 
 Resumen: **registrar → copiar 3 cosas → instalar tmux → autorizar el celular → correr el agente.**
 
+## Qué hace cada paso (la idea)
+
+1. **Registrar** = darle al PC un nombre y una contraseña (token) ante el "portero" en AWS
+   (la señalización). Sin eso, el portero no lo deja entrar ni lo presenta al celular.
+2. **Copiar** = llevar al PC el programa (el agente) y su contraseña.
+3. **tmux** = la "sala" donde quedan vivas tus terminales aunque el celular se desconecte.
+4. **Autorizar el celular** = decirle al PC "este celular es de confianza" (su llave pública).
+   Es un segundo candado, distinto del token: el token es para entrar al portero; la llave
+   es para abrir la terminal.
+5. **Correr el agente** = el PC se queda conectado con el portero esperando que el celular
+   lo llame. Cuando llamas, se abre el túnel directo entre los dos.
+
 ## 1. En pc-casa: registrar y preparar (una vez por PC)
 
 ```bash
@@ -54,6 +66,10 @@ La llave pública del celular es la misma para todos los PCs. Cópiala de pc-cas
 cd ~/rda && set -a; . ~/.config/rda/agent.env; set +a; ./rda-agent
 ```
 
+**El PC tiene que estar despierto.** Si se duerme, se corta todo. El agente no lo
+evita: deja corriendo en paralelo, en otra terminal, lo que ya usas para eso
+(`caffeinate` en el Mac, tu comando de siempre en Linux).
+
 En el celular: PCs → **Actualizar** → aparece `macbook — en línea` → **Conectar** →
 **Abrir terminal**. La primera vez la app guarda la llave del PC (en Ajustes →
 "PCs recordados" aparece su huella).
@@ -66,8 +82,6 @@ En el celular: PCs → **Actualizar** → aparece `macbook — en línea` → **
   o AirDrop; con `scp` no aparece.
 - La primera vez que corre, el firewall de macOS puede preguntar si acepta conexiones
   entrantes: **Permitir** (el hole punching las necesita).
-- Con la tapa cerrada el Mac se duerme y se corta todo. Para que siga despierto
-  mientras corre el agente (enchufado): `caffeinate -i ./rda-agent` en vez de `./rda-agent`.
 
 **Legion 5 Pro**
 - **Con Linux** es igual que pc-casa.
