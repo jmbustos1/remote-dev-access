@@ -108,13 +108,15 @@ type Session struct {
 	once    sync.Once
 	local   netip.AddrPort
 	mapping *upnp.Mapping
+	data    chan []byte // paquetes que no son STUN ni RDA1 (QUIC), ver PacketConn
 
 	mu         sync.Mutex
 	cands      []Candidate
 	stunServer *net.UDPAddr // servidor IPv4 para refrescar la puerta
 	pending    map[stun.TxID]chan []byte
-	remote     []netip.AddrPort // candidatos del otro lado
-	peer       netip.AddrPort   // dirección elegida (la que respondió)
+	remote     []netip.AddrPort        // candidatos del otro lado
+	peer       netip.AddrPort          // dirección elegida (la que respondió)
+	seen       map[netip.AddrPort]bool // direcciones que nos han hablado en RDA1
 	punching   bool
 	inbound    bool
 	connected  bool
@@ -139,8 +141,10 @@ func Open(ctx context.Context, cfg Config) (*Session, error) {
 		id:      hex.EncodeToString(idb),
 		cfg:     cfg,
 		closeCh: make(chan struct{}),
+		data:    make(chan []byte, 1024),
 		pending: map[stun.TxID]chan []byte{},
 		sentAt:  map[uint64]time.Time{},
+		seen:    map[netip.AddrPort]bool{},
 		local:   netx.LocalAddr(port),
 	}
 	go s.readLoop()
@@ -380,7 +384,22 @@ func (s *Session) readLoop() {
 		case bytes.HasPrefix(pkt, magic):
 			s.handle(string(pkt[len(magic):]), from)
 		default:
-			logx.For(logx.StagePunch).Debug("paquete desconocido ignorado", "from", from, "bytes", n)
+			// Datos del canal confiable (QUIC). Los aceptamos de cualquier dirección
+			// que ya nos haya hablado en RDA1, no solo del peer vigente: cada lado
+			// elige su camino por separado y pueden quedar asimétricos (visto en
+			// pruebas: uno manda por IPv6 y el otro por la red local).
+			s.mu.Lock()
+			ok := s.seen[from]
+			s.mu.Unlock()
+			if !ok {
+				logx.For(logx.StagePunch).Debug("paquete de datos de una dirección desconocida ignorado", "from", from, "bytes", n)
+				continue
+			}
+			select {
+			case s.data <- pkt:
+			default:
+				logx.For(logx.StagePunch).Debug("cola de datos llena: paquete descartado (QUIC lo retransmite)")
+			}
 		}
 	}
 }
@@ -394,6 +413,7 @@ func (s *Session) handle(body string, from netip.AddrPort) {
 	kind, sender, arg := parts[0], parts[1], parts[2]
 
 	s.mu.Lock()
+	s.seen[from] = true
 	adopted := false
 	if !s.peer.IsValid() {
 		switch {

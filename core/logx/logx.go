@@ -19,6 +19,7 @@ const (
 	StageICE       = "ice"
 	StagePunch     = "punch"
 	StageRelay     = "relay"
+	StageTunnel    = "tunnel"
 	StageSSH       = "ssh"
 )
 

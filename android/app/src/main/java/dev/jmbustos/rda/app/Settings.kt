@@ -38,6 +38,26 @@ class SettingsStore(context: Context) {
             .apply()
     }
 
+    /** Llave SSH privada del celular (PEM), cifrada igual que el token. */
+    fun loadSshKey(): String? = prefs.getString(KEY_SSH, null)?.let(::decrypt)
+
+    fun saveSshKey(pem: String) = prefs.edit().putString(KEY_SSH, encrypt(pem)).apply()
+
+    /**
+     * Llave pública de cada PC, recordada la primera vez que se conecta (como el
+     * known_hosts de OpenSSH). No es secreta: va en claro.
+     */
+    fun knownHostKey(pc: String): String? = prefs.getString(HOST_PREFIX + pc, null)
+
+    fun rememberHostKey(pc: String, key: String) = prefs.edit().putString(HOST_PREFIX + pc, key).apply()
+
+    fun forgetHostKey(pc: String) = prefs.edit().remove(HOST_PREFIX + pc).apply()
+
+    fun knownHosts(): Map<String, String> = prefs.all
+        .filterKeys { it.startsWith(HOST_PREFIX) }
+        .mapKeys { it.key.removePrefix(HOST_PREFIX) }
+        .mapValues { it.value.toString() }
+
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         (ks.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
@@ -65,7 +85,7 @@ class SettingsStore(context: Context) {
         cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, unb64(iv)))
         String(cipher.doFinal(unb64(ct)))
     }.onFailure {
-        LogStore.app("WARN", "no se pudo descifrar el token guardado", "err=${it.javaClass.simpleName}")
+        LogStore.app("WARN", "no se pudo descifrar un secreto guardado", "err=${it.javaClass.simpleName}")
     }.getOrNull()
 
     private fun b64(b: ByteArray) = Base64.encodeToString(b, Base64.NO_WRAP)
@@ -78,5 +98,7 @@ class SettingsStore(context: Context) {
         const val KEY_URL = "signaling_url"
         const val KEY_NAME = "device_name"
         const val KEY_TOKEN = "device_token"
+        const val KEY_SSH = "ssh_private_key"
+        const val HOST_PREFIX = "hostkey_"
     }
 }

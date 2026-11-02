@@ -70,7 +70,16 @@ Desplegada 2026-11-01 (16 recursos, cuenta personal, us-east-1). Dispositivos re
 |---|---|---|
 | 2026-11-01 | `rda-agent` (pc-casa) + `rda connect` (celular) desde el mismo PC | ✅ conectado en 3,1 s vía señalización AWS, eco OK |
 | 2026-11-01 | token inválido | ✅ rechazado en `$connect` |
-| | celular (APK) en 4G → pc-casa | pendiente (falta el lado APK) |
+| 2026-11-01 | celular (APK 1afa6ff) en 4G → pc-casa, botón Conectar | ✅ conectado directo en 2,6 s (`stun+upnp`), RTT 39 ms, eco OK |
+| 2026-11-01 | pantalla bloqueada con sesión activa (foreground service + wake lock) | ✅ sin corte (49 s en los logs; el usuario reporta ~10 min sin corte) |
 
 Observación: el primer minuto tras el `apply`, las conexiones del agente recibían 403 sin llegar
 a la Lambda (probablemente propagación de la API recién creada); un minuto después, todo normal.
+
+Observaciones APK (2026-11-01):
+- Tocar Conectar → "conectado directo" en 2,6 s. El paquete del PC llegó **antes** que la answer
+  (22:54:28.501 vs .708): el PC dispara apenas recibe la offer y el celular lo adopta como peer.
+- Con el foreground service, bloquear la pantalla ya **no** produce `sendto: operation not permitted`
+  ni "conexión perdida" (en la fase 2b la red se cortaba a los ~8 s).
+- Pendiente: repetir el bloqueo largo con Debug activado (para ver los keepalive) y probar en
+  otros fabricantes con optimización de batería agresiva.

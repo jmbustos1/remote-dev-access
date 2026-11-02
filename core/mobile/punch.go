@@ -3,9 +3,11 @@ package mobile
 import (
 	"context"
 	"strings"
+	"sync"
 
 	"github.com/jmbustos1/remote-dev-access/core/punch"
 	"github.com/jmbustos1/remote-dev-access/core/stun"
+	"github.com/jmbustos1/remote-dev-access/core/tunnel"
 )
 
 // PunchListener lo implementa Kotlin para seguir una sesión de hole punching.
@@ -20,6 +22,9 @@ type PunchListener interface {
 // PunchSession envuelve punch.Session para gomobile.
 type PunchSession struct {
 	s *punch.Session
+
+	mu sync.Mutex
+	tc *tunnel.Conn // canal QUIC (fase 4), se abre con la primera terminal
 }
 
 // OpenPunchSession abre el socket y reúne los candidatos (bloquea ~1 s: llamarlo
@@ -56,4 +61,12 @@ func (p *PunchSession) CandidatesDetail() string {
 // Connect recibe la línea de candidatos del otro lado.
 func (p *PunchSession) Connect(candidates string) error { return p.s.Connect(candidates) }
 func (p *PunchSession) Send(text string) error          { return p.s.Send(text) }
-func (p *PunchSession) Close()                          { p.s.Close() }
+
+func (p *PunchSession) Close() {
+	p.mu.Lock()
+	if p.tc != nil {
+		p.tc.Close()
+	}
+	p.mu.Unlock()
+	p.s.Close()
+}

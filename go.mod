@@ -9,7 +9,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/apigatewaymanagementapi v1.41.3
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.72.3
 	github.com/coder/websocket v1.8.15
+	github.com/creack/pty v1.1.24
 	github.com/huin/goupnp v1.3.0
+	github.com/quic-go/quic-go v0.64.1
+	golang.org/x/crypto v0.58.0
+	golang.org/x/term v0.47.0
 )
 
 require (
@@ -28,7 +32,9 @@ require (
 	github.com/aws/smithy-go v1.28.7 // indirect
 	golang.org/x/mobile v0.0.0-20261011034528-197770444867 // indirect
 	golang.org/x/mod v0.42.0 // indirect
+	golang.org/x/net v0.61.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect
 )
 

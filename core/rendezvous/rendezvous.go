@@ -56,6 +56,9 @@ type ListenerConfig struct {
 	// OnEvent recibe los eventos de cada sesión. s puede ser nil en el primer
 	// evento (EvPublic llega antes de que Open devuelva la sesión).
 	OnEvent func(from string, s *punch.Session, e punch.Event)
+	// OnSession se llama (en su propia goroutine) con cada sesión nueva, apenas
+	// se envía la answer: el agente monta ahí el canal QUIC + SSH.
+	OnSession func(from string, s *punch.Session)
 }
 
 // Listener mantiene al PC conectado a la señalización y atiende offers.
@@ -142,6 +145,9 @@ func (l *Listener) handle(in signaling.Incoming) {
 	}
 	if err := s.Connect(m.Candidates); err != nil {
 		log.Warn("candidatos inválidos en la offer", "from", in.From, "err", err)
+	}
+	if l.cfg.OnSession != nil {
+		go l.cfg.OnSession(in.From, s)
 	}
 }
 

@@ -1,34 +1,60 @@
 // rda-agent corre en cada PC: queda conectado a la señalización y atiende las
-// offers de los celulares abriendo una sesión de hole punching.
-// Fase 3: la sesión responde con eco (la terminal llega en la fase 4).
+// offers de los celulares abriendo una sesión de hole punching. Sobre cada sesión
+// monta el canal QUIC con un servidor SSH embebido que entrega tmux (fase 4).
+// Los mensajes RDA1 MSG siguen respondiéndose con eco (diagnóstico).
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/jmbustos1/remote-dev-access/core/logx"
 	"github.com/jmbustos1/remote-dev-access/core/punch"
 	"github.com/jmbustos1/remote-dev-access/core/rendezvous"
 	"github.com/jmbustos1/remote-dev-access/core/signaling"
+	"github.com/jmbustos1/remote-dev-access/core/sshserver"
+	"github.com/jmbustos1/remote-dev-access/core/tunnel"
 )
 
 var version = "dev"
 
 func main() {
+	home, _ := os.UserHomeDir()
+	cfgDir := filepath.Join(home, ".config", "rda")
+
 	url := flag.String("url", os.Getenv("RDA_URL"), "URL de la señalización (wss://…); env RDA_URL")
 	device := flag.String("device", os.Getenv("RDA_DEVICE"), "nombre de este PC; env RDA_DEVICE")
 	token := flag.String("token", os.Getenv("RDA_TOKEN"), "token de este PC; env RDA_TOKEN")
 	useUPnP := flag.Bool("upnp", true, "pedirle al router un puerto reenviado (UPnP)")
+	hostKeyPath := flag.String("host-key", filepath.Join(cfgDir, "host_ed25519"), "llave SSH de este PC (se genera si no existe)")
+	authKeys := flag.String("authorized-keys", filepath.Join(cfgDir, "authorized_keys"), "llaves públicas autorizadas")
+	authorize := flag.String("authorize", "", "agrega esta llave pública (\"ssh-ed25519 AAAA… nombre\") a -authorized-keys y sale")
+	tmuxSession := flag.String("tmux", "rda", "sesión de tmux a la que se engancha la terminal")
 	showVersion := flag.Bool("version", false, "imprime la versión y sale")
 	verbose := flag.Bool("v", false, "logs detallados (nivel debug)")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println(version)
+		return
+	}
+	if *authorize != "" {
+		fp, added, err := sshserver.Authorize(*authKeys, strings.TrimSpace(*authorize))
+		switch {
+		case err != nil:
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		case added:
+			fmt.Printf("llave %s autorizada en %s\n", fp, *authKeys)
+		default:
+			fmt.Printf("la llave %s ya estaba autorizada\n", fp)
+		}
 		return
 	}
 	logx.Setup(os.Stderr, *verbose)
@@ -39,6 +65,19 @@ func main() {
 	log := logx.For(logx.StageSignaling)
 	log.Info("rda-agent iniciando", "version", version, "device", *device)
 
+	hostKey, err := sshserver.LoadOrCreateHostKey(*hostKeyPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "llave del PC:", err)
+		os.Exit(1)
+	}
+	if _, err := os.Stat(*authKeys); err != nil {
+		log.Warn("todavía no hay llaves autorizadas: copia la llave pública desde Ajustes de la app y córrela con -authorize", "file", *authKeys)
+	}
+	sshserver.DefaultCommand = []string{"tmux", "new-session", "-A", "-s", *tmuxSession}
+	ssh := sshserver.New(sshserver.Config{HostKey: hostKey, AuthorizedKeysFile: *authKeys})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	l := rendezvous.Listen(rendezvous.ListenerConfig{
 		Signaling: signaling.ClientConfig{URL: *url, Device: *device, Token: *token},
 		UPnP:      *useUPnP,
@@ -50,6 +89,12 @@ func main() {
 				if s != nil {
 					s.Send("eco desde " + *device + ": " + e.Text)
 				}
+			}
+		},
+		OnSession: func(from string, s *punch.Session) {
+			// Termina cuando la sesión se cierra (reconexión o Close del agente).
+			if err := tunnel.Serve(ctx, s, func(st tunnel.Stream) { ssh.Handle(st) }); err != nil && !tunnel.IsClosed(err) {
+				logx.For(logx.StageTunnel).Info("canal QUIC terminado", "from", from, "motivo", err)
 			}
 		},
 	})

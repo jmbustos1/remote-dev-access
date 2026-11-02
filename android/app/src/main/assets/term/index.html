@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<!--
+  Terminal de la APK: xterm.js (el mismo emulador que usa la terminal de VS Code).
+  Puente con Kotlin:
+    JS → Kotlin  RDA.input(texto) · RDA.resize(cols, filas) · RDA.ready(cols, filas) · RDA.ctrlUsed()
+    Kotlin → JS  rdaWrite(base64) · rdaCtrl(bool) · rdaFont(px) · rdaFocus() · rdaReset()
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<link rel="stylesheet" href="xterm.css">
+<style>
+  html, body { margin: 0; height: 100%; background: #1e1e1e; overflow: hidden; }
+  #term { position: absolute; inset: 2px; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script>
+  const term = new Terminal({
+    fontFamily: 'monospace',
+    fontSize: 13,
+    cursorBlink: true,
+    scrollback: 2000,
+    allowProposedApi: true,
+    theme: { background: '#1e1e1e' },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById('term'));
+
+  // Ctrl "pegajoso": lo arma la tecla Ctrl de la barra de Kotlin y se aplica a
+  // la siguiente letra que llegue del teclado del celular (Ctrl+C, Ctrl+B…).
+  let ctrl = false;
+  function applyCtrl(data) {
+    if (!ctrl || data.length !== 1) return data;
+    const c = data.toUpperCase().charCodeAt(0);
+    if (c >= 0x40 && c <= 0x5f) {          // @ A–Z [ \ ] ^ _
+      ctrl = false; RDA.ctrlUsed();
+      return String.fromCharCode(c & 0x1f);
+    }
+    if (data === ' ') { ctrl = false; RDA.ctrlUsed(); return '\x00'; }
+    return data;
+  }
+  term.onData(d => RDA.input(applyCtrl(d)));
+  term.onBinary(d => RDA.input(d));
+
+  let last = '';
+  function refit() {
+    try { fit.fit(); } catch (e) { return; }
+    const now = term.cols + 'x' + term.rows;
+    if (now !== last) { last = now; RDA.resize(term.cols, term.rows); }
+  }
+  new ResizeObserver(refit).observe(document.getElementById('term'));
+
+  window.rdaWrite = b64 => {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    term.write(bytes);
+  };
+  window.rdaCtrl = on => { ctrl = on; };
+  window.rdaFont = px => { term.options.fontSize = px; refit(); };
+  window.rdaFocus = () => term.focus();
+  window.rdaReset = () => { term.reset(); last = ''; refit(); };
+
+  fit.fit();
+  last = term.cols + 'x' + term.rows;
+  RDA.ready(term.cols, term.rows);
+</script>
+</body>
+</html>

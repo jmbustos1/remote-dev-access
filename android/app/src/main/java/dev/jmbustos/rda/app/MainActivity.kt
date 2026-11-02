@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -50,6 +51,7 @@ class MainActivity : ComponentActivity() {
             LogStore.app("INFO", "app iniciada", "app=${BuildConfig.VERSION_NAME} core=${Mobile.version()}")
         }
         val settings = SettingsStore(applicationContext)
+        TerminalController.init(this)
         if (savedInstanceState == null) ConnectController.configure(this, settings.load())
         // Android 13+: sin este permiso la notificación de sesión activa no se ve.
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -77,6 +79,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun App(settings: SettingsStore) {
     var tab by rememberSaveable { mutableIntStateOf(Tab.Pcs.ordinal) }
+    val term by TerminalController.state.collectAsState()
+    if (term.visible) {
+        TerminalScreen() // pantalla completa; "‹ PCs" o atrás vuelve a las pestañas
+        return
+    }
     Scaffold(
         bottomBar = {
             NavigationBar {

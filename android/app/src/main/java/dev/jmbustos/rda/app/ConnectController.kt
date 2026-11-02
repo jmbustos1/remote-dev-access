@@ -61,9 +61,13 @@ object ConnectController : SignalListener, PunchListener {
 
     fun refresh() = client?.refreshDevices()
 
+    /** Sesión vigente con el PC (la usa la terminal para abrir el canal QUIC). */
+    fun session(): PunchSession? = session
+
     fun connect(pc: String) {
         val c = client ?: return
         if (_state.value.phase == SessionPhase.Connecting) return
+        TerminalController.close() // la terminal vieja usaba la sesión anterior
         session?.close()
         _state.update { it.copy(pc = pc, phase = SessionPhase.Connecting, error = null, chat = emptyList(), peer = "") }
         SessionService.start(appContext, pc) // red y CPU aseguradas desde el primer paquete
@@ -91,6 +95,7 @@ object ConnectController : SignalListener, PunchListener {
     }
 
     fun disconnect() {
+        TerminalController.close()
         session?.close()
         session = null
         _state.update { it.copy(phase = SessionPhase.None, peer = "", rttMs = 0) }

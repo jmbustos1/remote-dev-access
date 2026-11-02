@@ -59,6 +59,14 @@ fun PcsScreen(modifier: Modifier = Modifier) {
                         fontWeight = FontWeight.Bold,
                         color = if (st.phase == SessionPhase.Lost) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                     )
+                    if (st.phase == SessionPhase.Connected || st.phase == SessionPhase.Lost) {
+                        val term by TerminalController.state.collectAsState()
+                        val live = term.pc == st.pc && (term.phase == TermPhase.Open || term.phase == TermPhase.Opening)
+                        Button(onClick = { TerminalController.show(st.pc) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (live) "Volver a la terminal" else "Abrir terminal (tmux)")
+                        }
+                    }
+                    if (st.chat.isNotEmpty()) Text("Chat de prueba (eco):", style = MaterialTheme.typography.labelMedium)
                     st.chat.takeLast(12).forEach {
                         Text((if (it.mine) "yo> " else "${st.pc}> ") + it.text, fontFamily = FontFamily.Monospace)
                     }

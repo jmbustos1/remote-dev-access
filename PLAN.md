@@ -94,12 +94,22 @@ Cada fase termina en algo probable por sí solo.
 - Auth: token por dispositivo (hash en DynamoDB), validado en `$connect`.
 - **Hecho cuando:** `cli connect pc-casa` arma el canal sin copiar direcciones a mano.
 
-### Fase 4 — Terminal por el canal
-- `pion/webrtc` (ICE + DTLS + data channels) reemplaza el UDP crudo de la fase 2.
-- Tubería: data channel ↔ `localhost:22` en el PC; `localhost:2222` ↔ data channel en el cliente.
-- Agente como servicio systemd con reconexión automática al WebSocket.
-- **Hecho cuando:** desde Termux `ssh -p 2222 tecob@localhost` → `tmux attach` → Claude.
-  **Primer hito usable.**
+### Fase 4 — Terminal por el canal ✅ (código listo 2026-11-01; falta probar en el celular)
+- Cambio de plan: en vez de `pion/webrtc` (que traería su propio ICE y tiraría el
+  hole punching hecho a mano), **QUIC (`quic-go`) sobre el mismo socket del punching**.
+  `punch.Session.PacketConn()` separa STUN / RDA1 / QUIC por la forma del paquete.
+  QUIC da retransmisiones y streams; su dirección del peer es fija, así que un cambio de
+  camino (NAT que reasigna puerto, wifi→4G) no lo afecta.
+- **Servidor SSH embebido en el agente** (`core/sshserver`): no hace falta `sshd` ni abrir
+  el puerto 22; solo se llega por el canal P2P. Solo llave pública
+  (`~/.config/rda/authorized_keys`, se autoriza con `rda-agent -authorize '<llave>'`).
+  Llave del PC en `~/.config/rda/host_ed25519`; el celular la recuerda (TOFU).
+- La shell es `tmux new-session -A -s rda`: al cortarse la conexión, tmux sigue vivo.
+- APK: xterm.js en un WebView + barra de teclas (Esc, Tab, Ctrl, flechas, ^B…).
+  La llave SSH se genera en el celular (privada cifrada con el Keystore).
+- CLI: `rda keygen` y `rda ssh <pc> [comando]` (probado en local: pty + tmux OK).
+- **Hecho cuando:** desde la APK en 4G → terminal → tmux → Claude. **Primer hito usable.**
+- Pendiente: agente como servicio systemd.
 
 ### Fase 5 — Relay
 - `pion/turn` en EC2 `t4g.nano`, credenciales TURN efímeras emitidas por la Lambda.

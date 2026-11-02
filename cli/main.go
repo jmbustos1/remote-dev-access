@@ -22,6 +22,8 @@ Uso:
   rda punch [flags]   hole punching manual + mini chat P2P
   rda devices         lista los dispositivos de la señalización
   rda connect <pc>    conecta con un PC vía señalización + chat
+  rda ssh <pc> [cmd]  terminal en el PC (P2P → QUIC → SSH → tmux)
+  rda keygen          crea la llave SSH de este dispositivo
   rda token           genera un token de dispositivo y su hash
   rda signal-local    servidor de señalización en memoria (desarrollo)
   rda version
@@ -43,6 +45,10 @@ func main() {
 		os.Exit(cmdDevices(os.Args[2:]))
 	case "connect":
 		os.Exit(cmdConnect(os.Args[2:]))
+	case "ssh":
+		os.Exit(cmdSSH(os.Args[2:]))
+	case "keygen":
+		os.Exit(cmdKeygen(os.Args[2:]))
 	case "token":
 		os.Exit(cmdToken(os.Args[2:]))
 	case "signal-local":
