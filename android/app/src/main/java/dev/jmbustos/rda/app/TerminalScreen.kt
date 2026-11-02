@@ -34,7 +34,7 @@ private const val ESC = "\u001b"
 
 /** Teclas que el teclado del celular no tiene (o esconde). */
 private val extraKeys = listOf(
-    "Esc" to ESC, "Tab" to "\t",
+    "⏎" to "\r", "Esc" to ESC, "Tab" to "\t",
     "↑" to "$ESC[A", "↓" to "$ESC[B", "←" to "$ESC[D", "→" to "$ESC[C",
     "^C" to "\u0003", "^B" to "\u0002", // ^B = prefijo de tmux
     "PgUp" to "$ESC[5~", "PgDn" to "$ESC[6~",
