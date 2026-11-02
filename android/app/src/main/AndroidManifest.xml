@@ -4,6 +4,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Para registrar en los logs si estamos en wifi o datos móviles. -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Sesión activa: foreground service + wake lock parcial para que Android no corte la
+         red con la pantalla bloqueada. Solo mientras hay una sesión con un PC. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- allowBackup=false: los ajustes cifrados dependen de una llave del Keystore
          que no viaja en los respaldos. -->
@@ -22,5 +28,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".SessionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Sesión de terminal remota P2P con un PC del usuario" />
+        </service>
     </application>
 </manifest>

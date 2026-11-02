@@ -32,7 +32,9 @@ fun SettingsScreen(store: SettingsStore, modifier: Modifier = Modifier) {
     var showToken by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
 
-    val urlError = url.isNotBlank() && !url.trim().startsWith("wss://")
+    val context = androidx.compose.ui.platform.LocalContext.current
+    // ws:// solo para probar contra `rda signal-local` en la red de la casa.
+    val urlError = url.isNotBlank() && !url.trim().let { it.startsWith("wss://") || it.startsWith("ws://") }
 
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
@@ -45,7 +47,7 @@ fun SettingsScreen(store: SettingsStore, modifier: Modifier = Modifier) {
             label = { Text("URL del API Gateway") },
             placeholder = { Text("wss://xxxx.execute-api.us-east-1.amazonaws.com/prod") },
             isError = urlError,
-            supportingText = { if (urlError) Text("Debe empezar con wss://") },
+            supportingText = { if (urlError) Text("Debe empezar con wss:// (o ws:// en local)") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
             modifier = Modifier.fillMaxWidth(),
@@ -77,8 +79,10 @@ fun SettingsScreen(store: SettingsStore, modifier: Modifier = Modifier) {
         Button(
             enabled = !urlError,
             onClick = {
-                store.save(AppSettings(url, name, token))
+                val s = AppSettings(url.trim(), name.trim(), token.trim())
+                store.save(s)
                 saved = true
+                ConnectController.configure(context, s)
                 // Nunca loguear el token.
                 LogStore.app("INFO", "ajustes guardados", "url=${url.trim()} nombre=${name.trim()} token=${if (token.isBlank()) "vacío" else "definido"}")
             },

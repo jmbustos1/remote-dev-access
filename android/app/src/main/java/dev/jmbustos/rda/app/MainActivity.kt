@@ -1,11 +1,13 @@
 package dev.jmbustos.rda.app
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -26,13 +28,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import dev.jmbustos.rda.mobile.Mobile
 
 private enum class Tab(val label: String, val icon: ImageVector) {
-    Terminal("Terminal", Icons.Filled.PlayArrow),
+    Pcs("PCs", Icons.Filled.PlayArrow),
     Tests("Pruebas", Icons.Filled.Build),
     Logs("Logs", Icons.Filled.List),
     Settings("Ajustes", Icons.Filled.Settings),
@@ -49,6 +50,13 @@ class MainActivity : ComponentActivity() {
             LogStore.app("INFO", "app iniciada", "app=${BuildConfig.VERSION_NAME} core=${Mobile.version()}")
         }
         val settings = SettingsStore(applicationContext)
+        if (savedInstanceState == null) ConnectController.configure(this, settings.load())
+        // Android 13+: sin este permiso la notificación de sesión activa no se ve.
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
         lifecycle.addObserver(object : androidx.lifecycle.DefaultLifecycleObserver {
             // Android puede cortar la red de la app en segundo plano: dejarlo en los
             // logs permite correlacionar errores como "sendto: operation not permitted".
@@ -68,7 +76,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun App(settings: SettingsStore) {
-    var tab by rememberSaveable { mutableIntStateOf(Tab.Tests.ordinal) }
+    var tab by rememberSaveable { mutableIntStateOf(Tab.Pcs.ordinal) }
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -85,9 +93,7 @@ private fun App(settings: SettingsStore) {
     ) { padding ->
         val mod = Modifier.padding(padding).fillMaxSize()
         when (Tab.entries[tab]) {
-            Tab.Terminal -> Box(mod, contentAlignment = Alignment.Center) {
-                Text("La terminal llega en la fase 4", style = MaterialTheme.typography.bodyLarge)
-            }
+            Tab.Pcs -> PcsScreen(mod)
             Tab.Tests -> TestsScreen(mod)
             Tab.Logs -> LogsScreen(mod)
             Tab.Settings -> SettingsScreen(settings, mod)
