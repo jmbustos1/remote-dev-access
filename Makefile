@@ -9,7 +9,7 @@ export ANDROID_HOME ANDROID_NDK_HOME JAVA_HOME
 APK_OUT := android/app/build/outputs/apk/release/app-release.apk
 DIST_APK := bin/rda-$(VERSION).apk
 
-.PHONY: build test vet fmt termux aar apk apk-debug install clean
+.PHONY: build test vet fmt termux aar apk apk-debug install signaling-image deploy-signaling clean
 
 build: ## agente y cli para esta máquina → bin/
 	go build -ldflags '$(LDFLAGS)' -o bin/rda ./cli
@@ -47,6 +47,21 @@ apk-debug: aar
 
 install: ## instala la última APK de release en el celular conectado por USB
 	adb install -r $(DIST_APK)
+
+TF_SIGNALING := terraform -chdir=signaling/terraform
+
+signaling-image: ## imagen de la Lambda de señalización (local, no toca AWS)
+	docker build -f signaling/lambda/Dockerfile -t rda-signaling:$(VERSION) .
+
+deploy-signaling: signaling-image ## empuja la imagen a ECR y actualiza la Lambda
+	$(eval ECR := $(shell $(TF_SIGNALING) output -raw ecr_url))
+	$(eval FN := $(shell $(TF_SIGNALING) output -raw funcion))
+	aws ecr get-login-password | docker login --username AWS --password-stdin $(firstword $(subst /, ,$(ECR)))
+	docker tag rda-signaling:$(VERSION) $(ECR):latest
+	docker tag rda-signaling:$(VERSION) $(ECR):$(VERSION)
+	docker push $(ECR):latest
+	docker push $(ECR):$(VERSION)
+	aws lambda update-function-code --function-name $(FN) --image-uri $(ECR):$(VERSION) --query 'LastUpdateStatus' --output text
 
 clean:
 	rm -rf bin/ android/app/libs android/app/build android/build

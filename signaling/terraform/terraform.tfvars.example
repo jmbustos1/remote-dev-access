@@ -1,0 +1,7 @@
+# cp terraform.tfvars.example terraform.tfvars y completar.
+
+# Lo único obligatorio: adónde van las alertas de presupuesto.
+email_alertas = "tu@correo.cl"
+
+# aws_profile = "personal"
+# aws_region  = "us-east-1"
