@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Base64
+import android.view.KeyEvent
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.webkit.JavascriptInterface
@@ -44,8 +45,8 @@ object TerminalController : TerminalListener {
 
     private var webView: WebView? = null
     private var pageReady = false
-    private var cols = 80
-    private var rows = 24
+    @Volatile private var cols = 80
+    @Volatile private var rows = 24
     private var terminal: Terminal? = null
 
     private val _state = MutableStateFlow(TermState())
@@ -86,10 +87,52 @@ object TerminalController : TerminalListener {
     /** Teclas de la barra (Esc, flechas…): van directo, sin pasar por xterm.js. */
     fun sendKeys(seq: String) = send(seq.toByteArray())
 
-    fun toggleCtrl() {
-        val on = !_state.value.ctrl
-        _state.update { it.copy(ctrl = on) }
-        webView?.evaluateJavascript("rdaCtrl($on)", null)
+    fun toggleCtrl() = _state.update { it.copy(ctrl = !it.ctrl) }
+
+    /** Texto del teclado del celular. Con Ctrl armado, una letra se vuelve Ctrl+letra. */
+    fun typed(text: String) {
+        if (text.isEmpty()) return
+        if (_state.value.ctrl && text.length == 1) {
+            val c = text.uppercase()[0].code
+            if (c in 0x40..0x5f || text == " ") {
+                _state.update { it.copy(ctrl = false) }
+                sendKeys(if (text == " ") "\u0000" else (c and 0x1f).toChar().toString())
+                return
+            }
+        }
+        sendKeys(text.replace('\n', '\r')) // algunos teclados mandan \n como Enter
+    }
+
+    /** Teclas sueltas del teclado del celular (Enter, borrar, flechas…). */
+    fun key(e: KeyEvent) {
+        val esc = "\u001b"
+        val seq = when (e.keyCode) {
+            KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> "\r"
+            KeyEvent.KEYCODE_DEL -> "\u007f"
+            KeyEvent.KEYCODE_FORWARD_DEL -> "$esc[3~"
+            KeyEvent.KEYCODE_TAB -> "\t"
+            KeyEvent.KEYCODE_ESCAPE -> esc
+            KeyEvent.KEYCODE_DPAD_UP -> "$esc[A"
+            KeyEvent.KEYCODE_DPAD_DOWN -> "$esc[B"
+            KeyEvent.KEYCODE_DPAD_RIGHT -> "$esc[C"
+            KeyEvent.KEYCODE_DPAD_LEFT -> "$esc[D"
+            KeyEvent.KEYCODE_MOVE_HOME -> "$esc[H"
+            KeyEvent.KEYCODE_MOVE_END -> "$esc[F"
+            KeyEvent.KEYCODE_PAGE_UP -> "$esc[5~"
+            KeyEvent.KEYCODE_PAGE_DOWN -> "$esc[6~"
+            else -> null
+        }
+        if (seq != null) {
+            sendKeys(seq)
+            return
+        }
+        val ch = e.getUnicodeChar(e.metaState and KeyEvent.META_CTRL_MASK.inv())
+        if (ch == 0) return
+        if (e.isCtrlPressed && ch.toChar().uppercaseChar().code in 0x40..0x5f) {
+            sendKeys((ch.toChar().uppercaseChar().code and 0x1f).toChar().toString())
+        } else {
+            typed(ch.toChar().toString())
+        }
     }
 
     fun setFont(px: Int) {
@@ -114,7 +157,10 @@ object TerminalController : TerminalListener {
             (wv.parent as? ViewGroup)?.removeView(wv)
             return wv
         }
-        return WebView(context.applicationContext).apply {
+        return TermWebView(context.applicationContext).apply {
+            // Sin MATCH_PARENT, Chromium usa el modo "alto según el contenido": el
+            // 100% de la página vale ~0 y xterm.js calcula 1 fila (visto en el Redmi 9).
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             settings.javaScriptEnabled = true
             addJavascriptInterface(Bridge, "RDA")
             setBackgroundColor(0xFF1E1E1E.toInt())
@@ -143,6 +189,12 @@ object TerminalController : TerminalListener {
             runCatching { session.openTerminal(key, known, c.toLong(), r.toLong(), "", this) }
                 .onSuccess { t ->
                     terminal = t
+                    // Carrera: si el tamaño cambió mientras se abría (la página carga
+                    // con el WebView aún sin medir), el aviso se perdió: lo reenviamos.
+                    if (cols != c || rows != r) {
+                        LogStore.app("DEBUG", "tamaño cambió mientras abría la terminal", "antes=${c}x$r ahora=${cols}x$rows")
+                        runCatching { t.resize(cols.toLong(), rows.toLong()) }
+                    }
                     if (known.isEmpty()) settings.rememberHostKey(pc, t.hostKey())
                     _state.update { it.copy(phase = TermPhase.Open, hostFingerprint = t.hostFingerprint(), message = "") }
                     LogStore.app("INFO", "terminal abierta", "pc=$pc huella=${t.hostFingerprint()}")
@@ -219,5 +271,7 @@ object TerminalController : TerminalListener {
 
         @JavascriptInterface
         fun ctrlUsed() = _state.update { it.copy(ctrl = false) }
+
+        // (El Ctrl pegajoso lo aplica typed(); el de JS queda para teclados físicos.)
     }
 }
