@@ -15,6 +15,14 @@ build: ## agente y cli para esta máquina → bin/
 	go build -ldflags '$(LDFLAGS)' -o bin/rda ./cli
 	go build -ldflags '$(LDFLAGS)' -o bin/rda-agent ./agent
 
+agent-dist: ## agente + cli para los otros PCs → bin/dist/<os>-<arch>/ (ver docs/onboarding-pc.md)
+	for t in darwin/arm64 linux/amd64; do \
+		d=bin/dist/$${t%/*}-$${t#*/}; mkdir -p $$d; \
+		CGO_ENABLED=0 GOOS=$${t%/*} GOARCH=$${t#*/} go build -ldflags '$(LDFLAGS)' -o $$d/rda-agent ./agent && \
+		CGO_ENABLED=0 GOOS=$${t%/*} GOARCH=$${t#*/} go build -ldflags '$(LDFLAGS)' -o $$d/rda ./cli || exit 1; \
+	done
+	@ls -la bin/dist/*
+
 test:
 	go test ./...
 
