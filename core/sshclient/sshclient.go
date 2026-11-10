@@ -162,6 +162,10 @@ func (t *Terminal) HostKey() string { return t.hostKey }
 
 func (t *Terminal) Write(p []byte) (int, error) { return t.stdin.Write(p) }
 
+// CloseInput le avisa al programa remoto que no hay más entrada (EOF), como al
+// terminar `rda ssh pc 'cat > archivo' < archivo`.
+func (t *Terminal) CloseInput() error { return t.stdin.Close() }
+
 func (t *Terminal) Resize(cols, rows int) error { return t.sess.WindowChange(rows, cols) }
 
 // Wait bloquea hasta que termina el programa remoto o se corta la conexión.

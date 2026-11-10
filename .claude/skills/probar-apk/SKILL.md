@@ -34,7 +34,9 @@ celular del usuario, ni su agente real: usa señalización local (:8791), un age
 ## Probar el teclado como usuario
 
 `scripts/emu-test.sh type` usa `adb input text`, que inyecta teclas **sin pasar por el
-teclado en pantalla**: no detecta problemas del IME. Para eso:
+teclado en pantalla**: no detecta problemas del IME. **Antes de `type`, tocar el área negra
+de la terminal** (`tap 540 1000`): sin foco, el texto se pierde y un `KEYCODE_ENTER` "presiona"
+el primer botón enfocable (‹ PCs) y la app vuelve a la lista. Para probar el IME:
 
 1. Tocar el área negra de la terminal (abre Gboard).
 2. `scripts/emu-test.sh shot` y ubicar las teclas en la captura.
@@ -54,6 +56,13 @@ adb -s emulator-5560 shell input swipe 540 1700 540 400 400   # dedo hacia arrib
 tmux display -p -t rda-test '#{pane_in_mode}'                   # → "0": volvió al final
 ```
 Luego un toque simple debe seguir abriendo el teclado (`size` → ~50×25).
+
+## Si `up` falla en "configurando la app"
+
+Pasó una vez (2026-11-10) que la app quedó "Señalización: sin configurar" aunque la llave se
+generó; la repetición pasó completa. Probablemente el texto se escribió antes de que el campo
+tuviera foco. Si se repite: `shot` después de cada `tap_text` de Ajustes para ver cuál campo
+quedó vacío.
 
 ## Reglas
 

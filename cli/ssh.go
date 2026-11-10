@@ -158,7 +158,12 @@ func cmdSSH(args []string) int {
 			}
 		}()
 	}
-	go io.Copy(t, os.Stdin)
+	go func() {
+		io.Copy(t, os.Stdin)
+		if !interactive {
+			t.CloseInput() // entrada redirigida (archivo o tubería): mandar EOF
+		}
+	}()
 
 	wait := make(chan error, 1)
 	go func() { wait <- t.Wait() }()
