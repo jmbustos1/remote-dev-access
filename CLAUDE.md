@@ -48,6 +48,10 @@ señalización solo guarda una conexión por dispositivo (le quitarías los mens
 corriendo, o que ese PC se durmió. **Pedirle al usuario que lo levante** (comandos en docs/operar.md §1).
 No hay otra forma de entrar.
 
+Por el túnel, `pgrep rda-agent` en el Mac sale vacío aunque el agente esté corriendo: el agente es
+ancestro del comando y el `pgrep` de macOS excluye a sus ancestros. Usar `ps -axo pid,lstart,command | grep '[r]da-agent'`.
+(Si el comando llegó a ejecutarse, el agente obviamente está corriendo.)
+
 **4. Precauciones en el otro PC:**
 - Mirar antes de tocar: `git status`, cambios locales, stash, rama. Usar `git pull --ff-only`. Nada
   destructivo (`reset --hard`, borrar archivos) sin confirmación del usuario.

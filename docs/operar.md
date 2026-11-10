@@ -31,7 +31,9 @@ cd ~/rda && set -a; . ~/.config/rda/agent.env; set +a; ./rda-agent
 ```
 - `-v` agrega logs detallados (PING/PONG, candidatos), útiles para diagnosticar.
 - Se apaga con Ctrl+C. No arranca solo al prender el PC (a propósito: no hay systemd ni launchd).
-- Para revisar si está corriendo: `pgrep -af rda-agent` (Linux) o `pgrep -fl rda-agent` (Mac).
+- Para revisar si está corriendo: `pgrep -af rda-agent` (Linux) o `pgrep -fl rda-agent` (Mac). Por el
+  túnel, en el Mac usar `ps -axo pid,command | grep '[r]da-agent'` (`pgrep` excluye a sus ancestros, y
+  el agente lo es).
 
 ## 2. Mantener el PC despierto
 
