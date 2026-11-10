@@ -42,6 +42,7 @@ make agent-dist      # agente para macOS arm64 y Linux amd64
 ```
 
 - Desplegar la señalización: [signaling/README.md](signaling/README.md)
+- Uso diario (agentes, mantener despierto, archivos, administrar otro PC): [docs/operar.md](docs/operar.md)
 - Sumar un PC: [docs/onboarding-pc.md](docs/onboarding-pc.md)
 - Compilar y firmar la APK: [docs/android.md](docs/android.md)
 - Probar la APK en un emulador: `scripts/emu-test.sh up`
