@@ -89,3 +89,43 @@ Observaciones APK (2026-11-01):
 | Fecha | Prueba | Resultado |
 |---|---|---|
 | 2026-11-02 | APK 3632e45 (Redmi 9) → pc-casa: terminal → tmux → Claude Code | ✅ **primer hito usable**: el usuario le escribió a Claude Code desde el celular |
+
+## Fase 5 — Router sin UPnP
+
+Contexto (2026-11-09): el router nuevo de la casa no responde UPnP, NAT-PMP ni PCP (probado contra
+el gateway). Un equipo Huawei de la red se anuncia por SSDP como InternetGatewayDevice, pero es un
+punto de acceso (`upnpap.xml`, responde 403): no abre puertos. Desde 4G ya no conecta.
+Teoría y opciones en [nat-traversal.md](nat-traversal.md).
+
+### Experimento NAT (`rda natlab`)
+
+Reportes anónimos (`-anon` / botón Copiar de la app): nuestras IPs aparecen como `PUB1`, `LOCAL`.
+
+| Fecha | Red | Mapeo (A) | IP pública (B) | Asignación (B) | Conclusión |
+|---|---|---|---|---|---|
+| 2026-11-10 | wifi casa (router nuevo) | independiente del destino, conserva el puerto | siempre la misma | conserva el puerto local (32/32) | lado "fácil": sirve como el lado EIM de la fuerza bruta |
+| 2026-11-10 | 4G del celular (Redmi 9) | **independiente del destino** (mismo `PUB1:35524` hacia 5 destinos, incluidos 2 puertos de la misma IP) | siempre la misma | **por bloque**: 32 sockets en 35330–35784 (bloque estimado de 512), al azar dentro del bloque, no conserva el puerto local | el 4G **no es simétrico**: la fuerza bruta no hace falta |
+
+Notas:
+- **4G:** el CGNAT es EIM con asignación por bloque (port block allocation, típico de un CGNAT que
+  sigue RFC 6888). Esto **refuta** la hipótesis de la fase 2 ("hacia el PC sale con otro puerto").
+  La falla del 2026-11-01 se explica mejor por el `sendto: operation not permitted` de ese día
+  (Android cortando la red con la app en segundo plano, arreglado después con el foreground service).
+- **Confirmado en la práctica** (tabla de abajo): con los dos lados EIM, el punching normal conecta
+  sin UPnP. La falla de la tarde del 2026-11-09 quedó sin explicar (no hubo logs).
+
+### Intento real 4G → casa sin UPnP
+
+| Fecha | PC | Celular | Camino | RTT |
+|---|---|---|---|---|
+| 2026-11-10 01:00 | wifi casa, router nuevo **sin UPnP** | 4G | ✅ `stun` directo (`PUB1:35331` ⇄ `CASA:41976`) | 20–60 ms |
+
+Observaciones (logs de ambos lados con `-v` / Debug):
+- El puerto del celular (35331) cae dentro del bloque que midió `natlab` (35330–35784).
+- **Filtrado del 4G = independiente del origen:** el celular recibió el PING del PC (42.212) *antes*
+  de la answer (42.380), o sea, antes de haberle escrito nunca a esa dirección, y el CGNAT lo dejó
+  entrar. Era lo único que `natlab` no puede medir.
+- El PC pierde 2 s esperando UPnP (40.86 → 42.86) antes de mandar la answer: buscar UPnP en
+  paralelo para no retrasarla.
+- **Casa:** con IPv4 la casa es el lado EIM ideal. Sin UPnP, el problema es solo el filtrado
+  estricto (ver nat-traversal.md §2). IPv6 no disponible con el router nuevo (el viejo sí tenía).
