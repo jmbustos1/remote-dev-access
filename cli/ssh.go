@@ -103,7 +103,9 @@ func cmdSSH(args []string) int {
 		return 1
 	}
 
-	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	// Terminal (pty) solo si entrada Y salida son la terminal: con "> archivo" o
+	// "< archivo" van bytes tal cual (un pty cambiaría \n por \r\n y rompería binarios).
+	interactive := term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 	if *session == "" {
 		*session = cfg().Device
 	}
