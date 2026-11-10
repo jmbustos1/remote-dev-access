@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jmbustos1/remote-dev-access/core/logx"
+	"github.com/jmbustos1/remote-dev-access/core/natlab"
 	"github.com/jmbustos1/remote-dev-access/core/stun"
 )
 
@@ -55,6 +56,23 @@ func toResults(rs []stun.Result) []stunResult {
 		out = append(out, sr)
 	}
 	return out
+}
+
+// NATReport es el resultado de MeasureNAT: Text con las IPs reales (para ver en
+// pantalla) y Anon con nuestras IPs reemplazadas (para compartir o publicar).
+type NATReport struct {
+	Text string
+	Anon string
+}
+
+// MeasureNAT corre el experimento de core/natlab (≈ sockets × 100 ms).
+// label describe la red ("datos móviles"…). Bloquea: llamarlo fuera del hilo de UI.
+func MeasureNAT(label string, sockets int) (*NATReport, error) {
+	res, err := natlab.Run(context.Background(), natlab.Config{Sockets: sockets, Label: label})
+	if err != nil {
+		return nil, err
+	}
+	return &NATReport{Text: res.Text(), Anon: res.TextAnon()}, nil
 }
 
 // ProbeSTUN consulta los servidores STUN por defecto desde un mismo socket y

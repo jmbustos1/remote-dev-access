@@ -108,6 +108,7 @@ fun TestsScreen(modifier: Modifier = Modifier) {
                 }
             }
         }
+        NatLabCard()
         PunchCard()
         Text("Próxima prueba: señalización (fase 3).", style = MaterialTheme.typography.bodySmall)
     }
@@ -132,7 +133,7 @@ private fun parse(network: String, json: String): StunUi {
     return StunUi(network, o.getString("local"), nat, rows, nat.startsWith("NAT simétrico"), ipv6)
 }
 
-private fun networkType(context: Context): String {
+internal fun networkType(context: Context): String {
     val cm = context.getSystemService(ConnectivityManager::class.java)
     val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return "sin red"
     return when {

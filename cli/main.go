@@ -19,6 +19,7 @@ const usage = `rda — cliente de remote-dev-access
 
 Uso:
   rda stun [flags]    pregunta a servidores STUN cómo te ve internet
+  rda natlab [flags]  experimento: cómo reparte puertos el NAT (fuerza bruta sí/no)
   rda punch [flags]   hole punching manual + mini chat P2P
   rda devices         lista los dispositivos de la señalización
   rda connect <pc>    conecta con un PC vía señalización + chat
@@ -39,6 +40,8 @@ func main() {
 	switch os.Args[1] {
 	case "stun":
 		os.Exit(cmdSTUN(os.Args[2:]))
+	case "natlab":
+		os.Exit(cmdNatlab(os.Args[2:]))
 	case "punch":
 		os.Exit(cmdPunch(os.Args[2:]))
 	case "devices":
