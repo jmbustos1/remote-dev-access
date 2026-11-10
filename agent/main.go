@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -32,6 +33,7 @@ func main() {
 	device := flag.String("device", os.Getenv("RDA_DEVICE"), "nombre de este PC; env RDA_DEVICE")
 	token := flag.String("token", os.Getenv("RDA_TOKEN"), "token de este PC; env RDA_TOKEN")
 	useUPnP := flag.Bool("upnp", true, "pedirle al router un puerto reenviado (UPnP)")
+	port := flag.Uint("port", envUint("RDA_PORT"), "puerto UDP fijo, para un reenvío de puerto manual en el router (0 = al azar); env RDA_PORT")
 	hostKeyPath := flag.String("host-key", filepath.Join(cfgDir, "host_ed25519"), "llave SSH de este PC (se genera si no existe)")
 	authKeys := flag.String("authorized-keys", filepath.Join(cfgDir, "authorized_keys"), "llaves públicas autorizadas")
 	authorize := flag.String("authorize", "", "agrega esta llave pública (\"ssh-ed25519 AAAA… nombre\") a -authorized-keys y sale")
@@ -58,12 +60,16 @@ func main() {
 		return
 	}
 	logx.Setup(os.Stderr, *verbose)
+	if *port > 65535 {
+		fmt.Fprintln(os.Stderr, "-port debe estar entre 1 y 65535")
+		os.Exit(2)
+	}
 	if *url == "" || *device == "" || *token == "" {
 		fmt.Fprintln(os.Stderr, "faltan -url, -device o -token (o RDA_URL, RDA_DEVICE, RDA_TOKEN)")
 		os.Exit(2)
 	}
 	log := logx.For(logx.StageSignaling)
-	log.Info("rda-agent iniciando", "version", version, "device", *device)
+	log.Info("rda-agent iniciando", "version", version, "device", *device, "port", *port)
 
 	hostKey, err := sshserver.LoadOrCreateHostKey(*hostKeyPath)
 	if err != nil {
@@ -81,6 +87,7 @@ func main() {
 	l := rendezvous.Listen(rendezvous.ListenerConfig{
 		Signaling: signaling.ClientConfig{URL: *url, Device: *device, Token: *token},
 		UPnP:      *useUPnP,
+		Port:      uint16(*port),
 		OnEvent: func(from string, s *punch.Session, e punch.Event) {
 			switch e.Kind {
 			case punch.EvConnected:
@@ -104,4 +111,10 @@ func main() {
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	<-sig
 	log.Info("rda-agent detenido")
+}
+
+// envUint lee un entero sin signo de la variable de entorno (0 si no está o no es válido).
+func envUint(name string) uint {
+	n, _ := strconv.ParseUint(os.Getenv(name), 10, 16)
+	return uint(n)
 }

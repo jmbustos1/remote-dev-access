@@ -89,6 +89,14 @@ En el celular: PCs → **Actualizar** → aparece `macbook — en línea` → **
   WSL2 (Ubuntu) con `networkingMode=mirrored` para que el hole punching vea la red real.
   Esto no está probado: avísame antes de intentarlo.
 
+**Router sin UPnP (reenvío de puerto manual)**
+- Síntoma: desde 4G no conecta y el agente dice `UPnP no disponible`.
+- En el router: reserva por DHCP la IP local del PC (la que muestra `./rda stun`, p. ej.
+  `192.168.1.20`) y reenvía un puerto **UDP** (p. ej. `47900`) a esa IP, mismo puerto adentro y afuera.
+- En el PC: agrega `RDA_PORT=47900` a `~/.config/rda/agent.env` (o corre `./rda-agent -port 47900`).
+  El agente anuncia `IP pública:47900` como candidato `fijo`.
+- Un puerto por PC: si tienes dos PCs en la misma casa, usa un puerto distinto para cada uno.
+
 **Redes fuera de la casa (oficina, café)**
 - Los PCs en tu casa usan el UPnP del router y conectan directo.
 - En otra red sin UPnP, con el celular en 4G (NAT simétrico), lo más probable es que

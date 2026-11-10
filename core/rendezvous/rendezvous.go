@@ -51,6 +51,8 @@ func newID() string {
 type ListenerConfig struct {
 	Signaling signaling.ClientConfig
 	UPnP      bool
+	// Port fijo del socket UDP (reenvío de puerto manual en el router); 0 = al azar.
+	Port uint16
 	// STUNServers por defecto stun.DefaultServers (vacío en tests: sin STUN).
 	STUNServers []string
 	// OnEvent recibe los eventos de cada sesión. s puede ser nil en el primer
@@ -108,6 +110,15 @@ func (l *Listener) handle(in signaling.Incoming) {
 		sync.Mutex
 		s *punch.Session
 	}
+	// Reconexión del mismo dispositivo: la sesión vieja se cierra antes de abrir
+	// la nueva, para que la nueva pueda quedarse con el puerto fijo.
+	l.mu.Lock()
+	if old := l.sessions[in.From]; old != nil {
+		old.Close()
+		delete(l.sessions, in.From)
+	}
+	l.mu.Unlock()
+
 	servers := l.cfg.STUNServers
 	if servers == nil {
 		servers = stun.DefaultServers
@@ -115,6 +126,7 @@ func (l *Listener) handle(in signaling.Incoming) {
 	s, err := punch.Open(context.Background(), punch.Config{
 		STUNServers: servers,
 		UPnP:        l.cfg.UPnP,
+		Port:        l.cfg.Port,
 		OnEvent: func(e punch.Event) {
 			if l.cfg.OnEvent != nil {
 				holder.Lock()
@@ -134,7 +146,7 @@ func (l *Listener) handle(in signaling.Incoming) {
 
 	l.mu.Lock()
 	if old := l.sessions[in.From]; old != nil {
-		old.Close() // reconexión del mismo dispositivo: la sesión nueva reemplaza a la vieja
+		old.Close() // llegó otra offer del mismo dispositivo mientras abríamos esta
 	}
 	l.sessions[in.From] = s
 	l.mu.Unlock()

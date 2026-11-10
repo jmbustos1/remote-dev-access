@@ -51,6 +51,7 @@ var (
 const (
 	CandSTUN  = "stun"  // IPv4 pública según STUN
 	CandUPnP  = "upnp"  // puerto reenviado por el router
+	CandFixed = "fijo"  // puerto reenviado a mano en el router (Config.Port)
 	CandIPv6  = "ipv6"  // IPv6 global (sin NAT)
 	CandLocal = "local" // red local (mismo wifi)
 )
@@ -95,7 +96,11 @@ type Config struct {
 	// el único candidato es la dirección local (tests, misma red).
 	STUNServers []string
 	// UPnP: pedirle al router un puerto reenviado (para PCs en la casa).
-	UPnP    bool
+	UPnP bool
+	// Port fijo para el socket (0 = al azar). Sirve con un reenvío de puerto
+	// manual en el router: se anuncia IP pública:Port aunque STUN vea otro.
+	// Si está ocupado (otra sesión lo usa), se cae a un puerto al azar.
+	Port    uint16
 	OnEvent func(Event)
 }
 
@@ -127,11 +132,9 @@ type Session struct {
 
 // Open abre el socket y reúne nuestros candidatos.
 func Open(ctx context.Context, cfg Config) (*Session, error) {
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{}) // dual-stack: IPv4 e IPv6 en el mismo puerto
+	conn, fixed, err := listen(cfg.Port)
 	if err != nil {
-		if conn, err = net.ListenUDP("udp4", &net.UDPAddr{}); err != nil {
-			return nil, fmt.Errorf("abriendo socket UDP: %w", err)
-		}
+		return nil, err
 	}
 	idb := make([]byte, 4)
 	rand.Read(idb)
@@ -151,6 +154,9 @@ func Open(ctx context.Context, cfg Config) (*Session, error) {
 
 	log := logx.For(logx.StagePunch)
 	log.Info("sesión abierta", "id", s.id, "local", s.local)
+	if cfg.Port != 0 && !fixed {
+		log.Warn("puerto fijo ocupado, uso uno al azar (sin el reenvío del router)", "port", cfg.Port)
+	}
 
 	if len(cfg.STUNServers) > 0 {
 		pub4, err := s.discover(ctx, "ip4")
@@ -159,6 +165,11 @@ func Open(ctx context.Context, cfg Config) (*Session, error) {
 			return nil, err
 		}
 		s.addCand(Candidate{CandSTUN, pub4})
+		if fixed {
+			// Con el reenvío manual, desde internet se entra por IP pública:Port
+			// aunque el NAT haya mapeado la salida a otro puerto.
+			s.addCand(Candidate{CandFixed, netip.AddrPortFrom(pub4.Addr(), cfg.Port)})
+		}
 
 		if cfg.UPnP {
 			if m, err := upnp.MapUDP(ctx, port, "remote-dev-access", time.Hour); err != nil {
@@ -185,6 +196,27 @@ func Open(ctx context.Context, cfg Config) (*Session, error) {
 	s.emit(Event{Kind: EvPublic, Text: s.CandidatesString()})
 	go s.maintain()
 	return s, nil
+}
+
+// listen abre el socket UDP (dual-stack si se puede) en port, o al azar si
+// port es 0 o está ocupado. fixed indica si quedó en port.
+func listen(port uint16) (conn *net.UDPConn, fixed bool, err error) {
+	open := func(p int) (*net.UDPConn, error) {
+		c, err := net.ListenUDP("udp", &net.UDPAddr{Port: p}) // IPv4 e IPv6 en el mismo puerto
+		if err != nil {
+			c, err = net.ListenUDP("udp4", &net.UDPAddr{Port: p})
+		}
+		return c, err
+	}
+	if port != 0 {
+		if conn, err = open(int(port)); err == nil {
+			return conn, true, nil
+		}
+	}
+	if conn, err = open(0); err != nil {
+		return nil, false, fmt.Errorf("abriendo socket UDP: %w", err)
+	}
+	return conn, false, nil
 }
 
 func (s *Session) addCand(c Candidate) {
