@@ -64,8 +64,11 @@ type Options struct {
 	Term         string // por defecto xterm-256color
 	Cols, Rows   int    // 0 = sin pty
 	Command      string // vacío = shell (el agente engancha tmux)
-	Stdout       io.Writer
-	Stderr       io.Writer // por defecto = Stdout
+	// Session pide una sesión de tmux propia (vacío = la por defecto del agente).
+	// Solo aplica sin Command.
+	Session string
+	Stdout  io.Writer
+	Stderr  io.Writer // por defecto = Stdout
 }
 
 // Terminal es una sesión SSH abierta.
@@ -135,6 +138,13 @@ func Open(conn net.Conn, o Options) (*Terminal, error) {
 		}
 	}
 	t.sess.Setenv("LANG", "es_CL.UTF-8")
+	if o.Session != "" && o.Command == "" {
+		// Mismo nombre que sshserver.SessionEnv (no se importa: el servidor trae pty).
+		// Un agente antiguo lo ignora y engancha su sesión por defecto.
+		if err := t.sess.Setenv("RDA_TMUX", o.Session); err != nil {
+			return fail(fmt.Errorf("el PC rechazó la sesión tmux %q (nombre inválido): %w", o.Session, err))
+		}
+	}
 	if o.Command != "" {
 		err = t.sess.Start(o.Command)
 	} else {

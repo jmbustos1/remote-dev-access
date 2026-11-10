@@ -74,6 +74,23 @@ En el celular: PCs → **Actualizar** → aparece `macbook — en línea` → **
 **Abrir terminal**. La primera vez la app guarda la llave del PC (en Ajustes →
 "PCs recordados" aparece su huella).
 
+## Sesiones de tmux: una por dispositivo
+
+Cada cliente entra a su propia sesión de tmux en el PC, y las sesiones sobreviven a las desconexiones:
+
+| Cliente | Sesión | Cómo cambiarla |
+|---|---|---|
+| Celular (APK) | `rda` | `rda-agent -tmux otra` |
+| `rda ssh <pc>` desde otro PC | el nombre de ese dispositivo (p. ej. `pc-casa-cli`) | `rda ssh -tmux rda <pc>` entra a la del celular |
+
+Desde otro PC, con un dispositivo cliente propio (no uses el nombre del agente de ese PC: la
+señalización guarda una conexión por dispositivo y le quitarías los mensajes):
+```bash
+scripts/register-pc.sh pc-casa-cli        # una vez
+(set -a; . ~/.config/rda/pc-casa-cli.agent.env; set +a; ./bin/rda ssh macbook)
+```
+`-v` deja los logs en `~/.config/rda/ssh.log` (no encima de la terminal).
+
 ## Particularidades
 
 **MacBook Pro M4**

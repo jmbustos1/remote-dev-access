@@ -37,7 +37,7 @@ func main() {
 	hostKeyPath := flag.String("host-key", filepath.Join(cfgDir, "host_ed25519"), "llave SSH de este PC (se genera si no existe)")
 	authKeys := flag.String("authorized-keys", filepath.Join(cfgDir, "authorized_keys"), "llaves públicas autorizadas")
 	authorize := flag.String("authorize", "", "agrega esta llave pública (\"ssh-ed25519 AAAA… nombre\") a -authorized-keys y sale")
-	tmuxSession := flag.String("tmux", "rda", "sesión de tmux a la que se engancha la terminal")
+	tmuxSession := flag.String("tmux", "rda", "sesión de tmux para clientes que no eligen una (el celular); rda ssh usa la de su nombre")
 	showVersion := flag.Bool("version", false, "imprime la versión y sale")
 	verbose := flag.Bool("v", false, "logs detallados (nivel debug)")
 	flag.Parse()
@@ -79,7 +79,11 @@ func main() {
 	if _, err := os.Stat(*authKeys); err != nil {
 		log.Warn("todavía no hay llaves autorizadas: copia la llave pública desde Ajustes de la app y córrela con -authorize", "file", *authKeys)
 	}
-	sshserver.DefaultCommand = []string{"tmux", "new-session", "-A", "-s", *tmuxSession}
+	if !sshserver.ValidSession(*tmuxSession) {
+		fmt.Fprintln(os.Stderr, "-tmux: solo letras, números, '-' y '_'")
+		os.Exit(2)
+	}
+	sshserver.DefaultSession = *tmuxSession
 	ssh := sshserver.New(sshserver.Config{HostKey: hostKey, AuthorizedKeysFile: *authKeys})
 
 	ctx, cancel := context.WithCancel(context.Background())

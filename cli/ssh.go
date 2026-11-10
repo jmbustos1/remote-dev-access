@@ -64,6 +64,7 @@ func cmdSSH(args []string) int {
 	keyPath := fs.String("key", filepath.Join(rdaDir(), "id_ed25519"), "llave privada (crearla con rda keygen)")
 	useUPnP := fs.Bool("upnp", false, "pedir puerto UPnP también de este lado")
 	verbose := fs.Bool("v", false, "logs detallados")
+	session := fs.String("tmux", "", "sesión de tmux en el PC (por defecto: el nombre de este dispositivo; \"rda\" = la del celular)")
 	fs.Parse(args)
 	logx.Setup(os.Stderr, *verbose)
 	if fs.NArg() < 1 {
@@ -103,7 +104,10 @@ func cmdSSH(args []string) int {
 	}
 
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))
-	o := sshclient.Options{PrivateKeyPEM: string(priv), KnownHostKey: known, Command: command, Stdout: os.Stdout, Stderr: os.Stderr}
+	if *session == "" {
+		*session = cfg().Device
+	}
+	o := sshclient.Options{PrivateKeyPEM: string(priv), KnownHostKey: known, Command: command, Session: *session, Stdout: os.Stdout, Stderr: os.Stderr}
 	if interactive {
 		o.Cols, o.Rows, _ = term.GetSize(int(os.Stdout.Fd()))
 		o.Term = os.Getenv("TERM")
@@ -117,10 +121,26 @@ func cmdSSH(args []string) int {
 	if known == "" {
 		appendKnown(knownPath, pc, t.HostKey())
 	}
-	fmt.Fprintf(os.Stderr, "✓ terminal en %s en %s\r\n", pc, time.Since(start).Round(time.Millisecond))
+	if command == "" {
+		fmt.Fprintf(os.Stderr, "✓ terminal en %s (tmux %q) en %s\r\n", pc, *session, time.Since(start).Round(time.Millisecond))
+	} else {
+		fmt.Fprintf(os.Stderr, "✓ terminal en %s en %s\r\n", pc, time.Since(start).Round(time.Millisecond))
+	}
 
-	// De aquí en adelante la pantalla es del programa remoto: solo avisos.
-	if !*verbose {
+	// De aquí en adelante la pantalla es del programa remoto: los logs no pueden
+	// escribirse encima (en modo crudo además salen en escalera). Con -v van a un
+	// archivo; sin -v se descartan.
+	switch {
+	case *verbose && interactive:
+		logPath := filepath.Join(rdaDir(), "ssh.log")
+		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+			defer f.Close()
+			logx.Setup(f, true)
+			fmt.Fprintf(os.Stderr, "  logs (-v) en %s\r\n", logPath)
+		} else {
+			logx.Setup(io.Discard, false)
+		}
+	case !*verbose:
 		logx.Setup(io.Discard, false)
 	}
 	if interactive {

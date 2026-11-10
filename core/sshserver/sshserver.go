@@ -33,15 +33,43 @@ import (
 	"github.com/jmbustos1/remote-dev-access/core/logx"
 )
 
-// DefaultCommand se ejecuta cuando el cliente pide una "shell": se engancha a la
-// sesión de tmux "rda" o la crea. Al cortarse la conexión, tmux sigue vivo.
-var DefaultCommand = []string{"tmux", "new-session", "-A", "-s", "rda"}
+// DefaultSession es la sesión de tmux que engancha un cliente que pide una
+// "shell" sin elegir sesión (el celular). Al cortarse la conexión, tmux sigue vivo.
+var DefaultSession = "rda"
+
+// SessionEnv es la variable que el cliente manda (pedido "env" de SSH) para
+// elegir su propia sesión de tmux en vez de la por defecto. Así cada dispositivo
+// tiene la suya (el celular "rda", un PC la de su nombre) y cualquiera puede
+// entrar a la de otro pidiéndola.
+const SessionEnv = "RDA_TMUX"
+
+// TmuxBin es el ejecutable de tmux (los tests lo cambian por echo).
+var TmuxBin = "tmux"
+
+// TmuxCommand engancha (o crea) la sesión de tmux name.
+func TmuxCommand(name string) []string {
+	return []string{TmuxBin, "new-session", "-A", "-s", name}
+}
+
+// ValidSession dice si name es aceptable como nombre de sesión: solo letras,
+// números, '-' y '_' (va como argumento de tmux, nunca por una shell).
+func ValidSession(name string) bool {
+	if name == "" || len(name) > 32 {
+		return false
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
 
 // Config del servidor.
 type Config struct {
 	HostKey            ssh.Signer
 	AuthorizedKeysFile string
-	// Command reemplaza a DefaultCommand (tests).
+	// Command reemplaza a tmux (tests).
 	Command []string
 }
 
@@ -128,6 +156,7 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 		term    = "xterm-256color"
 		size    *pty.Winsize
 		env     []string
+		session string // sesión de tmux pedida con SessionEnv ("" = la por defecto)
 		ptmx    *os.File
 		started bool
 		done    = make(chan struct{})
@@ -212,7 +241,16 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 				size = &pty.Winsize{Cols: uint16(p.Cols), Rows: uint16(p.Rows)}
 			case "env":
 				var kv struct{ Name, Value string }
-				if ssh.Unmarshal(req.Payload, &kv) == nil && (kv.Name == "LANG" || strings.HasPrefix(kv.Name, "LC_")) {
+				switch {
+				case ssh.Unmarshal(req.Payload, &kv) != nil:
+					ok = false
+				case kv.Name == SessionEnv:
+					if ok = ValidSession(kv.Value); ok {
+						session = kv.Value
+					} else {
+						log.Warn("nombre de sesión tmux inválido", "valor", kv.Value)
+					}
+				case kv.Name == "LANG" || strings.HasPrefix(kv.Name, "LC_"):
 					env = append(env, kv.Name+"="+kv.Value)
 				}
 			case "window-change":
@@ -232,7 +270,11 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 				}
 				argv := s.cfg.Command
 				if argv == nil {
-					argv = DefaultCommand
+					name := DefaultSession
+					if session != "" {
+						name = session
+					}
+					argv = TmuxCommand(name)
 				}
 				if req.Type == "exec" {
 					var c struct{ Command string }
