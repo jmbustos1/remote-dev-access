@@ -272,9 +272,12 @@ predecible y así controlar el orden):
 le llegue uno del cliente (`punch.Session.ConnectAfter`, `rendezvous.ListenerFirstShot`). El
 cliente dispara apenas recibe la answer. Resultado: Mac → pc-casa ✅ 3/3, a cambio de ~1 s más.
 
-**Lo que no cubre:** si el que está detrás de un NAT de Linux es el **agente** y el cliente tiene
-un router "normal", el orden ideal es el inverso. Para eso, la escalera de la fase 5: reintentar
-con sockets nuevos y el orden invertido, y al final el relay.
+**Y si el del NAT de Linux es el agente** (por ejemplo, el Mac en la zona Wi-Fi atendiendo a
+pc-casa), el orden ideal es el inverso. Por eso el cliente **reintenta**: si en 5 s
+(`FirstAttempt`) no conecta, abre sockets nuevos y manda otra offer con `"order":"listener-first"`.
+Esta vez el agente dispara al tiro y el cliente espera 1 s (`DialerHold`). Los sockets tienen que
+ser nuevos: la tabla del NAT envenenado ya tiene anotada la combinación vieja. Un agente antiguo
+ignora el campo y repite el orden normal, así que no rompe nada.
 
 **Lección:** que `natlab` diga "EIM" no basta. Mide el mapeo hacia servidores que *nosotros*
 contactamos primero; no ve qué pasa cuando el otro lado escribe antes. El orden de los disparos

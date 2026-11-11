@@ -13,6 +13,7 @@ import (
 
 func init() {
 	punch.PunchInterval = 20 * time.Millisecond
+	punch.KeepaliveInterval = 50 * time.Millisecond
 }
 
 // Todo en local: servidor de señalización en memoria, sesiones sin STUN (los

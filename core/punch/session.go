@@ -100,8 +100,12 @@ type Config struct {
 	// Port fijo para el socket (0 = al azar). Sirve con un reenvío de puerto
 	// manual en el router: se anuncia IP pública:Port aunque STUN vea otro.
 	// Si está ocupado (otra sesión lo usa), se cae a un puerto al azar.
-	Port    uint16
-	OnEvent func(Event)
+	Port uint16
+	// CloseIdle cierra la sesión sola si en ese tiempo no llega nada del otro
+	// lado (PING, PONG ni datos): un cliente que se fue, o un intento que nunca
+	// conectó. 0 = nunca. El agente lo usa para no acumular sesiones muertas.
+	CloseIdle time.Duration
+	OnEvent   func(Event)
 }
 
 // Session es un socket UDP con estado de punching.
@@ -129,6 +133,7 @@ type Session struct {
 	seq        uint64
 	sentAt     map[uint64]time.Time
 	lastPong   time.Time
+	lastHeard  time.Time // último paquete del otro lado (o la apertura): ver Config.CloseIdle
 }
 
 // Open abre el socket y reúne nuestros candidatos.
@@ -141,15 +146,16 @@ func Open(ctx context.Context, cfg Config) (*Session, error) {
 	rand.Read(idb)
 	port := uint16(conn.LocalAddr().(*net.UDPAddr).Port)
 	s := &Session{
-		conn:    conn,
-		id:      hex.EncodeToString(idb),
-		cfg:     cfg,
-		closeCh: make(chan struct{}),
-		data:    make(chan []byte, 1024),
-		pending: map[stun.TxID]chan []byte{},
-		sentAt:  map[uint64]time.Time{},
-		seen:    map[netip.AddrPort]bool{},
-		local:   netx.LocalAddr(port),
+		conn:      conn,
+		id:        hex.EncodeToString(idb),
+		cfg:       cfg,
+		closeCh:   make(chan struct{}),
+		data:      make(chan []byte, 1024),
+		pending:   map[stun.TxID]chan []byte{},
+		sentAt:    map[uint64]time.Time{},
+		seen:      map[netip.AddrPort]bool{},
+		lastHeard: time.Now(),
+		local:     netx.LocalAddr(port),
 	}
 	go s.readLoop()
 
@@ -377,6 +383,9 @@ func (s *Session) Close() {
 	})
 }
 
+// Done se cierra cuando la sesión termina (Close, o CloseIdle sin noticias).
+func (s *Session) Done() <-chan struct{} { return s.closeCh }
+
 func (s *Session) emit(e Event) {
 	if s.cfg.OnEvent != nil {
 		s.cfg.OnEvent(e)
@@ -473,6 +482,9 @@ func (s *Session) readLoop() {
 			// pruebas: uno manda por IPv6 y el otro por la red local).
 			s.mu.Lock()
 			ok := s.seen[from]
+			if ok {
+				s.lastHeard = time.Now()
+			}
 			s.mu.Unlock()
 			if !ok {
 				logx.For(logx.StagePunch).Debug("paquete de datos de una dirección desconocida ignorado", "from", from, "bytes", n)
@@ -497,6 +509,7 @@ func (s *Session) handle(body string, from netip.AddrPort) {
 
 	s.mu.Lock()
 	s.seen[from] = true
+	s.lastHeard = time.Now()
 	adopted := false
 	if !s.peer.IsValid() {
 		switch {
@@ -697,7 +710,13 @@ func (s *Session) maintain() {
 				s.lastPong = time.Time{}
 			}
 			active := (s.peer.IsValid() || len(s.remote) > 0) && !s.holding
+			silent := time.Since(s.lastHeard)
 			s.mu.Unlock()
+			if idle := s.cfg.CloseIdle; idle > 0 && silent > idle {
+				log.Info("cerrando sesión abandonada: sin noticias del otro lado", "id", s.id, "silencio", silent.Round(time.Second))
+				go s.Close() // Close cierra closeCh, que también termina este bucle
+				return
+			}
 			if lost {
 				log.Warn("conexión perdida: sin respuesta del otro lado", "silencio", time.Since(lastPong).Round(time.Second))
 				s.emit(Event{Kind: EvLost})

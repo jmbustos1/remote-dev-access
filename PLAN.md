@@ -155,6 +155,10 @@ Piezas:
 - [ ] **5c. IPv6:** revisar router nuevo y APN del celular (`IPv4/IPv6`). Sin código.
 - [x] **5c'. Diagnóstico:** 4G → casa sin UPnP conecta directo (2026-11-10). La falla de la tarde
   anterior quedó sin explicar. Mejora pendiente: UPnP en paralelo (hoy retrasa la answer 2 s).
+- [x] **Orden de los disparos** (2026-11-11): el agente espera 1 s para que el cliente dispare
+  primero; si en 5 s no conecta, el cliente reintenta con sockets nuevos y el orden invertido.
+  Cubre los NAT de Linux (zona Wi-Fi de Android) en cualquiera de los dos lados. Ver
+  nat-traversal.md §9. El agente también cierra las sesiones sin noticias tras 4 min.
 - [ ] **5d. Fuerza bruta** como candidato (multi-socket en `core/punch`, tipo de NAT en la offer).
   En pausa: el 4G medido es EIM. Útil solo si aparece una red simétrica (oficina, otra operadora).
 - [ ] **5e. Relay propio en Fargate bajo demanda:** contenedor Go chico (no TURN completo);
