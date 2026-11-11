@@ -212,3 +212,22 @@ Observaciones:
 - `natlab` antes no veía esto: la parte B mide un solo destino ("IP pública: ✓ siempre la misma")
   y la parte C concluía 98 % con 1024 disparos. Ahora la parte A cuenta las IPs y la C multiplica.
 - No se probó la conexión Mac → pc-casa desde esta red en estas mediciones.
+
+### Primera conexión por el camino iterativo (2026-11-11 18:06)
+
+Celular directo por 4G (APK 3f9a00a) → pc-casa (agente 3f9a00a, router sin UPnP). El 4G seguía
+simétrico, como en la tarde.
+
+| Momento | Qué pasó |
+|---|---|
+| +0 s | offer del celular; pc-casa mide su NAT: EIM |
+| +2,1 s | pc-casa ve que el celular es simétrico (campo `nat` de la offer) → papel "barrer" (2 s se van en buscar UPnP) |
+| +2,8 s | llegan los datos del barrido: 1 IP, puertos 23771–24064 (~294), 256 sockets → **6 disparos por ronda para 99 %** |
+| +2,85 s | **conectado**: el celular llega desde `PUB-CEL:23815`, un puerto que nunca anunció (peer reflexive), dentro del rango estimado. RTT 30–52 ms |
+
+Observaciones:
+- Con el CGNAT por bloque (~256–512), el barrido es mínimo: 6 disparos por ronda. El riesgo de llenar la
+  tabla del router de la casa (hasta ~12 000 entradas por intento) solo aplica a NAT "al azar en todo
+  el rango", como el wifi de la oficina.
+- A los ~27 s de conectar (18:06:58) el celular dejó de mandar: fue el usuario, que cerró la app.
+  No es un corte.
