@@ -185,3 +185,30 @@ Observaciones:
 - **Lección:** una medición de `natlab` describe la red en ese momento, no a la operadora.
   Medir justo antes de cada prueba, y que la escalera de la fase 5 no asuma el tipo de NAT por
   la red.
+
+### Wifi de la oficina: simétrico, al azar y con 2 IPs públicas (2026-11-11)
+
+Mac conectado al wifi de la oficina (ya no a la zona Wi-Fi del celular). Dos mediciones con
+`rda natlab -anon`; la segunda, con la lista de destinos ampliada de 5 a 22.
+
+| Cuándo | A. un socket → destinos | IPs públicas (A) | B. 32 sockets → google |
+|---|---|---|---|
+| 15:06 (5 destinos) | **simétrico** (saltos +6897 −18634 −1504 +10294) | 2 (`PUB1` ×3, `PUB2` ×2) | al azar, 32893–63249, siempre `PUB1`, 0/32 conservan el puerto |
+| 15:37 (22 destinos) | **simétrico** | 2 (`PUB1` ×9, `PUB2` ×13) | al azar, 35987–64232, siempre `PUB1`, 0/32 conservan el puerto |
+
+Observaciones:
+- **El pool son 2 IPs.** Con 5 destinos no se distinguía un pool de 2 de uno de 4; con 22 destinos
+  y solo 2 IPs, uno de 3 o más queda prácticamente descartado.
+- **La IP pública se elige por IP destino y es estable:** los dos puertos de Google salen por la
+  misma, los dos de Nextcloud también, y al repetir la parte A cada destino salió por la misma IP
+  que en la corrida anterior (22/22).
+- **No se puede predecir cuál toca:** dos IPs vecinas de Twilio (mismo /24) salieron una por `PUB1`
+  y la otra por `PUB2`. Hacia pc-casa puede ser cualquiera de las dos.
+- **Puertos al azar en todo el rango** (sin bloque por cliente, a diferencia del 4G): rango
+  efectivo ≈ 64 512.
+- **Para el camino iterativo** (el barrido de puertos, antes "fuerza bruta"): el otro lado tiene
+  que repartir los disparos entre las 2 IPs. Con 256 sockets acá, ~2322 disparos para 99 %
+  (con 1024: 87 %). Viable, al doble de costo que con una sola IP.
+- `natlab` antes no veía esto: la parte B mide un solo destino ("IP pública: ✓ siempre la misma")
+  y la parte C concluía 98 % con 1024 disparos. Ahora la parte A cuenta las IPs y la C multiplica.
+- No se probó la conexión Mac → pc-casa desde esta red en estas mediciones.

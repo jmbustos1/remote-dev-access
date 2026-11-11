@@ -38,7 +38,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Experimento "natlab" (core/natlab): mide cómo reparte puertos el NAT de la red
- * actual, para saber si la fuerza bruta de puertos podría reemplazar al relay.
+ * actual, para saber si el camino iterativo (barrido de puertos) podría reemplazar al relay.
  * Usa solo servidores STUN públicos: no necesita el PC.
  */
 @Composable

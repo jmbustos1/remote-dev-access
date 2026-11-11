@@ -127,9 +127,9 @@ t = 0 s     offer/answer (cada lado manda también su tipo de NAT medido con STU
             ├─ Escalón 1: directo (LAN, IPv6, UPnP, puerto fijo, STUN) — PING cada 0,5 s
 t = 3 s     ¿PONG? sí → conectado (lo normal: 0,1–1 s) · no → fracasa el escalón 1
             ├─ en paralelo: la Lambda pide arrancar el relay (Fargate tarda 30–60 s)
-            ├─ Escalón 2: fuerza bruta de puertos (solo si un lado conserva el puerto)
-            │    ronda 1: 256 sockets en el lado simétrico × 1024 disparos del otro (~2 s)
-            │    ronda 2: puertos nuevos al azar (~2 s)
+            ├─ Escalón 2: camino iterativo (solo si un lado es simétrico y el otro no)
+            │    ronda 1: 256 sockets en el lado simétrico × ~1160 disparos del otro por IP (~1 s)
+            │    rondas 2 y 3: puertos nuevos al azar
 t = 8 s     ¿PONG? sí → conectado directo, el relay se apaga solo sin usarse · no → fracasa el 2
             ├─ Escalón 3: relay
 t ≈ 35–65 s relay arriba → ambos lados se conectan a él
@@ -139,15 +139,19 @@ t = 90 s    nada → FRACASO TOTAL: la app muestra el motivo de cada escalón
 | Escalón | Fracasa si | Por qué ese tiempo |
 |---|---|---|
 | 1. Directo | ningún PONG en 3 s (~6 rondas) | cuando funciona conecta en ~1 s; reintentar no cambia cómo descarta el NAT |
-| 2. Fuerza bruta | 2 rondas sin acierto (~5 s), o se salta | con ~98 % por ronda, dos fallos seguidos = falla una condición de fondo |
+| 2. Iterativo | 2 rondas sin acierto (~5 s), o se salta | con ~98 % por ronda, dos fallos seguidos = falla una condición de fondo |
 | 3. Relay | sin conexión a t = 90 s | margen para el arranque en frío de Fargate |
 
-Los tiempos del diagrama son el diseño. **Lo que hace el código hoy** (escalón 1 solamente): intento
-normal de 5 s (`FirstAttempt`) y, si no conecta, reintento con sockets nuevos y orden invertido
-hasta 30 s (`ConnectTimeout`). Dónde encaja el escalón 2 respecto de ese reintento es una decisión
-pendiente de 5d.
+Los tiempos del diagrama son el diseño original. **Lo que hace el código hoy** (escalones 1 y 2),
+según el tipo de NAT que cada lado mide y manda en la offer y la answer:
 
-- **Saltar la fuerza bruta** si los dos lados son simétricos (probabilidad ~0): pasar al relay.
+| Tipos de NAT | Qué se hace |
+|---|---|
+| Los dos independientes del destino (o un agente antiguo) | Intento normal de 5 s (`FirstAttempt`); si no conecta, reintento con sockets nuevos y orden invertido hasta 30 s |
+| Uno simétrico | Punching normal **y** camino iterativo a la vez, desde el primer instante, hasta 30 s. Sin reintento invertido |
+| Los dos simétricos | Solo el punching normal (sirve si un lado tiene puerto reenviado); si falla, el error dice que hace falta el relay |
+
+- **Saltar el camino iterativo** si los dos lados son simétricos (probabilidad ~0): pasar al relay.
   No se recuerda nada por red: el 4G cambió de tipo el mismo día, así que se mide en cada intento.
 - **Arranque especulativo del relay** apenas falla el escalón 1, o de inmediato si la offer/answer
   ya dicen "simétrico + al azar": Fargate cobra por segundo (mínimo 1 min), fracciones de centavo.
@@ -168,17 +172,35 @@ Piezas:
   primero; si en 5 s no conecta, el cliente reintenta con sockets nuevos y el orden invertido.
   Cubre los NAT de Linux (zona Wi-Fi de Android) en cualquiera de los dos lados. Ver
   nat-traversal.md §9. El agente también cierra las sesiones sin noticias tras 4 min.
-- [ ] **5d. Fuerza bruta** como candidato (multi-socket en `core/punch`, tipo de NAT en la offer).
-  **Necesaria** desde el 11/11 (ver cabecera); es el siguiente paso después de 5f. Falta el diseño.
-  Preguntas que tiene que responder antes de escribir código:
-  - Qué campos nuevos llevan la offer y la answer (tipo de NAT y rango medido), quién mide y
-    cuánto retrasa cada intento.
-  - N sockets y M disparos según el rango medido (las cifras del diagrama suponen puertos al azar;
-    con bloque chico son otras, y N no puede superar el bloque).
-  - Qué pasa con los roles invertidos (el simétrico es el agente).
-  - Cómo se combina con el orden de disparos de nat-traversal.md §9.
-  - Cómo el socket ganador pasa a ser el de la sesión y qué se hace con los demás (QUIC va encima).
-  - Criterio de "hecho" reproducible, dado que el 4G cambia de tipo durante el día.
+- [ ] **5d. Camino iterativo** (el barrido de puertos; antes "fuerza bruta"). **Implementado y
+  probado en simulación el 2026-11-11; falta la prueba real** (necesita el agente nuevo en
+  pc-casa). Teoría en nat-traversal.md §4.3. Diseño, con **S** = el lado simétrico y **E** = el
+  que conserva su IP:puerto:
+  - **Quién mide:** cada sesión pregunta a un segundo servidor STUN desde su socket
+    (`punch.Session.NAT`, ~0,1 s) y manda `nat: eim | sym` en la offer y la answer. El rango de
+    puertos y las IPs se miden solo si hay que iterar.
+  - **Roles por tipo de NAT, no por quién llama** (`rendezvous.iterRole`): si el simétrico es el
+    agente, el agente abre los sockets y el cliente barre.
+  - **S: `Spray`.** Abre N = 256 sockets y dispara desde todos al candidato público de E. A 16 de
+    ellos les pregunta por STUN, repartidos entre servidores, y con eso arma la lista de IPs
+    públicas y el rango de puertos (mismo análisis que `natlab`). Lo manda a E en un mensaje de
+    señalización nuevo, `kind: "sweep"`.
+  - **E: `Sweep`.** Desde su único socket dispara a M puertos al azar de cada IP de S, con
+    M = lo necesario para 99 % según `natlab.ProbesFor` (oficina: ~1160 por IP; bloque de 256:
+    decenas). Hasta 3 rondas, tope de 4096 disparos por ronda, ~3200 paquetes/s.
+  - **Orden (nat-traversal.md §9):** S dispara primero siempre; E empieza al recibir el `sweep`.
+  - **Socket ganador:** el socket de S que recibe respuesta pasa a ser el de la sesión y los demás
+    se cierran. QUIC no se entera: lee y escribe a través de la sesión (`punch.PacketConn`).
+  - **Varias IPs públicas:** el `sweep` lleva la lista y E reparte los disparos entre todas.
+  - **Convive con el punching normal:** el socket de la sesión sigue disparando a los candidatos;
+    si E tiene un puerto reenviado (UPnP o fijo), gana ese camino y los sockets extra se cierran.
+  - **Compatibilidad:** un agente antiguo no manda `nat` ni entiende `sweep`: se hace lo de antes.
+  - **Tests:** `core/natsim` simula la casa (EIM, filtrado estricto), la oficina (simétrico, 2 IPs,
+    puertos al azar) y el CGNAT por bloque. Cubren los dos sentidos de roles y los dos simétricos.
+  - **Hecho cuando:** el Mac en el wifi de la oficina entra a pc-casa sin UPnP ni puerto fijo.
+  - Pendiente menor: los 3 servidores STUN por defecto pueden no mostrar todas las IPs de un pool
+    más grande; un PC con límite bajo de archivos abiertos abre menos de 256 sockets (se avisa en
+    el log y sigue con los que haya).
 - [ ] **5e. Relay propio en Fargate bajo demanda.** **Va al final**, después de usar 5d/5f en el
   día a día y estar conforme con el producto. Decisiones ya tomadas para cuando toque:
   - Contenedor Go chico (no TURN completo): `RDA1 RELAY <sesión> <firma HMAC>` empareja a los
@@ -239,7 +261,7 @@ Piezas:
 - Logs del agente en `journalctl`; opcional: enviar últimos logs del PC a la APK para debug.
 
 **Orden:** 0 → 1 → APK mínima → 2 → 2b → 3 → 4 (hechas). Ahora, fase 5 en este orden:
-**5f (arranque automático) → 5d (fuerza bruta) → validar en uso real → 5e (relay)**, y después 7.
+**5f (arranque automático) → 5d (camino iterativo; código hecho el 11/11, falta la prueba real) → validar en uso real → 5e (relay)**, y después 7.
 El relay va al final a propósito: primero conocer el producto con los caminos directos.
 
 ---
@@ -277,7 +299,9 @@ Relay siempre encendido: ~7 (EC2) a ~11 (Fargate) USD/mes, incluida la IPv4 púb
 ## Riesgos y pendientes
 
 - **PC del trabajo:** un agente que acepta conexiones vía hole punching puede violar la política
-  de seguridad de la empresa. Consultar antes de instalar.
+  de seguridad de la empresa. Conversado con el CTO (2026-11-11): de acuerdo con usarlo para
+  viajes y para trabajar desde el celular. El camino iterativo se parece a un escaneo de puertos
+  (miles de paquetes UDP a puertos al azar): tenerlo presente en redes ajenas.
 - **NAT simétrico en 4G:** ocurre. La misma operadora midió EIM en la mañana y simétrico en la
   tarde del 2026-11-11 (y la oficina es simétrico con puertos al azar). Sin UPnP ni puerto fijo
   en el PC, el punching normal no conecta: por eso 5d y 5e. Medir con `rda stun` antes de probar.

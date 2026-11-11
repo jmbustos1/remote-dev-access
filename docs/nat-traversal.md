@@ -102,7 +102,10 @@ t≈RTT  los dos cruzan agujeros ya abiertos → PONG → conectado
 ```
 Requiere IPv6 en **las dos** redes. El código ya lo soporta (candidato `ipv6`).
 
-### 4.3 Fuerza bruta de puertos (paradoja del cumpleaños)
+### 4.3 Camino iterativo: barrer puertos (paradoja del cumpleaños)
+
+En el proyecto se llama **camino iterativo** (`punch.Session.Spray` / `Sweep`); en la literatura
+es "fuerza bruta de puertos" o *birthday attack*. Implementado el 2026-11-11 (PLAN.md, 5d).
 
 **La idea.** Si no se puede saber el puerto que el CGNAT asignará hacia el PC, se crean muchos y
 se apuesta a que coincida alguno:
@@ -157,6 +160,10 @@ iguales.
    - Los M disparos crean M entradas en la tabla del router de la casa.
    - Algún firewall puede tomarlo como un escaneo de puertos.
 
+4. **Varias IPs públicas elegidas por destino** (medido en la oficina, 2026-11-11): STUN dice por
+   cuál IP salimos hacia el servidor STUN, no hacia el otro peer. Si el pool es chico, el otro lado
+   reparte los disparos entre todas (M × número de IPs). `natlab` las cuenta en la parte A.
+
 **Cómo reparte puertos el NAT cambia todo:**
 
 | Asignación | R efectivo | Estrategia |
@@ -190,8 +197,9 @@ La contra es el arranque en frío, de 30–60 s. Los precios están por verifica
 
 `core/natlab` usa solo servidores STUN públicos: no necesita el PC ni tocar el router.
 
-- **A. Un socket → 5 destinos.** Dos puertos de Google en la misma IP (19302 y 3478), más
-  Cloudflare, Twilio y Nextcloud. Distingue EIM / ADM / APDM.
+- **A. Un socket → ~20 destinos.** Dos pares de puertos en la misma IP (Google 19302 y 3478,
+  Nextcloud 3478 y 443) y una veintena de operadores en redes distintas. Distingue EIM / ADM /
+  APDM y cuenta **cuántas IPs públicas** usa el NAT (un CGNAT puede elegir la IP según el destino).
 - **B. 32 sockets nuevos → un destino.** Mide si la IP pública es siempre la misma, si conserva
   el puerto, y los saltos entre sockets (secuencial / bloque / al azar).
 - **C. Conclusión:** el rango efectivo y cuántos disparos harían falta para 99 %.
@@ -219,7 +227,7 @@ Cómo se clasifica:
 
 ## 7. La escalera que se adoptó
 
-Directo (LAN, IPv6, UPnP, puerto fijo, STUN) → fuerza bruta (solo si tiene sentido) → relay.
+Directo (LAN, IPv6, UPnP, puerto fijo, STUN) → camino iterativo (solo si un lado es simétrico y el otro no) → relay.
 Los tiempos y criterios de fracaso de cada escalón están en PLAN.md, fase 5.
 
 ## 8. Lección de método: medir antes de construir
@@ -227,7 +235,7 @@ Los tiempos y criterios de fracaso de cada escalón están en PLAN.md, fase 5.
 La hipótesis "4G simétrico" salió de **una** falla (2026-11-01) con una explicación plausible, y
 se repitió en el plan como si fuera un hecho. Ese mismo día había otra causa a la vista
 (`sendto: operation not permitted`: Android cortando la red en segundo plano). El experimento
-de 5 s la refutó antes de escribir el refactor multi-socket de la fuerza bruta, que no hacía falta.
+de 5 s la refutó antes de escribir el refactor multi-socket del camino iterativo (entonces "fuerza bruta"), que ese día no hacía falta.
 
 Resultado medido del 4G (anónimo, ver experimentos.md):
 ```
@@ -242,7 +250,7 @@ apps P2P; bloques para poder registrar quién usó qué puerto sin anotar cada c
 
 > **Corrección (2026-11-11, tarde).** "El 4G es EIM" vale para esa medición, no para la operadora.
 > Horas después de conectar 3/3, el mismo 4G midió **simétrico**, con bloque de ~256, y no conectó
-> en ningún orden. El celular de un colega con la misma operadora dio lo mismo. La fuerza bruta
+> en ningún orden. El celular de un colega con la misma operadora dio lo mismo. El camino iterativo
 > sí hace falta para estas redes. Detalle en experimentos.md, "El 4G se volvió simétrico".
 
 ## 9. El orden importa: NAT de Linux "envenenado" (2026-11-11)

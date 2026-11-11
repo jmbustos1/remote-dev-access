@@ -90,8 +90,19 @@ type Event struct {
 	Text string         // public (candidatos) / message / failed
 }
 
+// Conn es lo que la sesión necesita de un socket UDP. *net.UDPConn lo cumple;
+// los tests usan una red simulada (core/natsim).
+type Conn interface {
+	ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error)
+	WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error)
+	LocalAddr() net.Addr
+	Close() error
+}
+
 // Config de una sesión.
 type Config struct {
+	// ListenUDP abre los sockets (nil = sockets reales). Para tests con natsim.
+	ListenUDP func(port uint16) (Conn, error)
 	// STUNServers a probar en orden (se usan para IPv4 e IPv6). Vacío = sin STUN:
 	// el único candidato es la dirección local (tests, misma red).
 	STUNServers []string
@@ -110,7 +121,7 @@ type Config struct {
 
 // Session es un socket UDP con estado de punching.
 type Session struct {
-	conn    *net.UDPConn
+	conn    Conn // el socket vigente: leer con sock() (el camino iterativo lo cambia)
 	id      string
 	cfg     Config
 	closeCh chan struct{}
@@ -120,6 +131,8 @@ type Session struct {
 	data    chan []byte // paquetes que no son STUN ni RDA1 (QUIC), ver PacketConn
 
 	mu         sync.Mutex
+	extras     []Conn // camino iterativo: sockets abiertos por Spray, hasta que uno gana
+	nat        string // NATEIM / NATSym, o "" si no se pudo medir
 	cands      []Candidate
 	stunServer *net.UDPAddr // servidor IPv4 para refrescar la puerta
 	pending    map[stun.TxID]chan []byte
@@ -127,6 +140,7 @@ type Session struct {
 	peer       netip.AddrPort          // dirección elegida (la que respondió)
 	seen       map[netip.AddrPort]bool // direcciones que nos han hablado en RDA1
 	punching   bool
+	looping    bool // hay un punchLoop corriendo (como mucho uno)
 	holding    bool // ConnectAfter: esperando que el otro lado dispare primero
 	inbound    bool
 	connected  bool
@@ -138,13 +152,14 @@ type Session struct {
 
 // Open abre el socket y reúne nuestros candidatos.
 func Open(ctx context.Context, cfg Config) (*Session, error) {
-	conn, fixed, err := listen(cfg.Port)
+	conn, fixed, err := listen(cfg, cfg.Port)
 	if err != nil {
 		return nil, err
 	}
 	idb := make([]byte, 4)
 	rand.Read(idb)
-	port := uint16(conn.LocalAddr().(*net.UDPAddr).Port)
+	la := conn.LocalAddr().(*net.UDPAddr)
+	port := uint16(la.Port)
 	s := &Session{
 		conn:      conn,
 		id:        hex.EncodeToString(idb),
@@ -157,7 +172,10 @@ func Open(ctx context.Context, cfg Config) (*Session, error) {
 		lastHeard: time.Now(),
 		local:     netx.LocalAddr(port),
 	}
-	go s.readLoop()
+	if ip, ok := netip.AddrFromSlice(la.IP); ok && !ip.IsUnspecified() {
+		s.local = netip.AddrPortFrom(ip.Unmap(), port) // socket ya atado a una IP (natsim)
+	}
+	go s.readLoop(conn)
 
 	log := logx.For(logx.StagePunch)
 	log.Info("sesión abierta", "id", s.id, "local", s.local)
@@ -172,6 +190,7 @@ func Open(ctx context.Context, cfg Config) (*Session, error) {
 			return nil, err
 		}
 		s.addCand(Candidate{CandSTUN, pub4})
+		s.detectNAT(ctx, pub4)
 		if fixed {
 			// Con el reenvío manual, desde internet se entra por IP pública:Port
 			// aunque el NAT haya mapeado la salida a otro puerto.
@@ -207,13 +226,19 @@ func Open(ctx context.Context, cfg Config) (*Session, error) {
 
 // listen abre el socket UDP (dual-stack si se puede) en port, o al azar si
 // port es 0 o está ocupado. fixed indica si quedó en port.
-func listen(port uint16) (conn *net.UDPConn, fixed bool, err error) {
-	open := func(p int) (*net.UDPConn, error) {
+func listen(cfg Config, port uint16) (conn Conn, fixed bool, err error) {
+	open := func(p int) (Conn, error) {
+		if cfg.ListenUDP != nil {
+			return cfg.ListenUDP(uint16(p))
+		}
 		c, err := net.ListenUDP("udp", &net.UDPAddr{Port: p}) // IPv4 e IPv6 en el mismo puerto
 		if err != nil {
 			c, err = net.ListenUDP("udp4", &net.UDPAddr{Port: p})
 		}
-		return c, err
+		if err != nil {
+			return nil, err // sin esto, un *net.UDPConn nil quedaría como Conn no nil
+		}
+		return c, nil
 	}
 	if port != 0 {
 		if conn, err = open(int(port)); err == nil {
@@ -375,7 +400,13 @@ func (s *Session) Send(text string) error {
 func (s *Session) Close() {
 	s.once.Do(func() {
 		close(s.closeCh)
-		s.conn.Close()
+		s.mu.Lock()
+		socks := append([]Conn{s.conn}, s.extras...)
+		s.extras = nil
+		s.mu.Unlock()
+		for _, c := range socks {
+			c.Close()
+		}
 		if s.mapping != nil {
 			s.mapping.Close()
 		}
@@ -420,8 +451,63 @@ func (s *Session) discover(ctx context.Context, family string) (netip.AddrPort, 
 	return netip.AddrPort{}, fmt.Errorf("ningún servidor STUN respondió por %s: %w", family, lastErr)
 }
 
-// bind manda un Binding Request y espera su respuesta, que llega por readLoop.
+// sock es el socket vigente.
+func (s *Session) sock() Conn {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conn
+}
+
+// Tipo de NAT que se anuncia al otro lado (ver Session.NAT).
+const (
+	NATEIM = "eim" // mismo IP:puerto público hacia cualquier destino
+	NATSym = "sym" // cambia según el destino: el candidato STUN no le sirve al otro lado
+)
+
+// NAT dice cómo mapea nuestro NAT, medido al abrir la sesión: "" si no se pudo
+// medir (sin STUN, o respondió un solo servidor).
+func (s *Session) NAT() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nat
+}
+
+// detectNAT pregunta a un segundo servidor STUN, en otra IP, desde el mismo
+// socket: si nos ve con otro IP:puerto que el primero, el mapeo depende del
+// destino. Se mide en cada sesión: la misma red cambia de tipo durante el día
+// (docs/experimentos.md, 2026-11-11).
+func (s *Session) detectNAT(ctx context.Context, first netip.AddrPort) {
+	s.mu.Lock()
+	used := s.stunServer
+	s.mu.Unlock()
+	for _, name := range s.cfg.STUNServers {
+		addr, err := netx.ResolveUDP(ctx, name, "ip4")
+		if err != nil || addr.IP.Equal(used.IP) {
+			continue
+		}
+		mapped, err := s.bind(addr, time.Second, 1)
+		if err != nil {
+			continue
+		}
+		kind := NATEIM
+		if mapped != first {
+			kind = NATSym
+		}
+		s.mu.Lock()
+		s.nat = kind
+		s.mu.Unlock()
+		logx.For(logx.StageSTUN).Info("tipo de NAT", "nat", kind, "primero", first, "segundo", mapped, "server", name)
+		return
+	}
+}
+
+// bind manda un Binding Request por el socket vigente y espera su respuesta.
 func (s *Session) bind(server *net.UDPAddr, timeout time.Duration, attempts int) (netip.AddrPort, error) {
+	return s.bindOn(s.sock(), server, timeout, attempts)
+}
+
+// bindOn manda un Binding Request por conn y espera su respuesta, que llega por readLoop.
+func (s *Session) bindOn(conn Conn, server *net.UDPAddr, timeout time.Duration, attempts int) (netip.AddrPort, error) {
 	id, req, err := stun.NewBindingRequest()
 	if err != nil {
 		return netip.AddrPort{}, err
@@ -431,9 +517,10 @@ func (s *Session) bind(server *net.UDPAddr, timeout time.Duration, attempts int)
 	s.pending[id] = ch
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); delete(s.pending, id); s.mu.Unlock() }()
+	to := netip.AddrPortFrom(server.AddrPort().Addr().Unmap(), uint16(server.Port))
 
 	for i := 0; i < attempts; i++ {
-		if _, err := s.conn.WriteToUDP(req, server); err != nil {
+		if _, err := conn.WriteToUDPAddrPort(req, to); err != nil {
 			return netip.AddrPort{}, err
 		}
 		select {
@@ -450,18 +537,23 @@ func (s *Session) bind(server *net.UDPAddr, timeout time.Duration, attempts int)
 
 // --- Lectura y despacho ----------------------------------------------------
 
-func (s *Session) readLoop() {
+// readLoop lee de un socket hasta que se cierra: hay uno por socket (el de la
+// sesión y, en el camino iterativo, uno por cada socket de Spray).
+func (s *Session) readLoop(conn Conn) {
 	buf := make([]byte, 2048)
 	for {
-		n, from, err := s.conn.ReadFromUDPAddrPort(buf)
+		n, from, err := conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			select {
 			case <-s.closeCh:
 				return
 			default:
-				logx.For(logx.StagePunch).Warn("error leyendo socket", "err", err)
-				continue
 			}
+			if errors.Is(err, net.ErrClosed) {
+				return // socket de Spray que no ganó
+			}
+			logx.For(logx.StagePunch).Warn("error leyendo socket", "err", err)
+			continue
 		}
 		pkt := append([]byte(nil), buf[:n]...)
 		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
@@ -474,7 +566,7 @@ func (s *Session) readLoop() {
 				ch <- pkt
 			}
 		case bytes.HasPrefix(pkt, magic):
-			s.handle(string(pkt[len(magic):]), from)
+			s.handle(string(pkt[len(magic):]), from, conn)
 		default:
 			// Datos del canal confiable (QUIC). Los aceptamos de cualquier dirección
 			// que ya nos haya hablado en RDA1, no solo del peer vigente: cada lado
@@ -499,7 +591,7 @@ func (s *Session) readLoop() {
 	}
 }
 
-func (s *Session) handle(body string, from netip.AddrPort) {
+func (s *Session) handle(body string, from netip.AddrPort, conn Conn) {
 	log := logx.For(logx.StagePunch)
 	parts := strings.SplitN(body, " ", 3)
 	if len(parts) < 3 {
@@ -508,6 +600,20 @@ func (s *Session) handle(body string, from netip.AddrPort) {
 	kind, sender, arg := parts[0], parts[1], parts[2]
 
 	s.mu.Lock()
+	if conn != s.conn {
+		// Llegó por un socket de Spray: ese es el que acertó.
+		losers, ok := s.promote(conn)
+		if !ok {
+			s.mu.Unlock()
+			return
+		}
+		defer func() {
+			for _, c := range losers {
+				c.Close()
+			}
+		}()
+		log.Info("camino iterativo: un socket acertó, pasa a ser el de la sesión", "local", conn.LocalAddr(), "from", from, "cerrados", len(losers))
+	}
 	s.seen[from] = true
 	s.lastHeard = time.Now()
 	adopted := false
@@ -582,7 +688,7 @@ func (s *Session) handle(body string, from netip.AddrPort) {
 }
 
 func (s *Session) write(to netip.AddrPort, body string) error {
-	_, err := s.conn.WriteToUDPAddrPort(append(append([]byte(nil), magic...), body...), to)
+	_, err := s.sock().WriteToUDPAddrPort(append(append([]byte(nil), magic...), body...), to)
 	return err
 }
 
@@ -629,6 +735,18 @@ func (s *Session) ping() {
 // punchLoop dispara PINGs seguidos hasta conectar o agotar el disparo rápido.
 // Con wait > 0, primero espera a que el otro lado dispare (ver ConnectAfter).
 func (s *Session) punchLoop(wait time.Duration) {
+	s.mu.Lock()
+	if s.looping {
+		s.mu.Unlock()
+		return
+	}
+	s.looping = true
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.looping = false
+		s.mu.Unlock()
+	}()
 	if wait > 0 && !s.waitFirstShot(wait) {
 		return
 	}

@@ -11,7 +11,7 @@ APK (xterm.js) ─ SSH ─ QUIC ─ UDP (hole punching / UPnP) ─ rda-agent ─
 ```
 
 **Estado:** fase 4 funcionando (terminal en el celular por 4G hacia un PC en casa, conexión
-directa). Pendiente: conectar en redes sin UPnP (fase 5: fuerza bruta de puertos y relay en Fargate),
+directa). Pendiente: conectar en redes sin UPnP (fase 5: camino iterativo —barrido de puertos— y relay en Fargate),
 arranque automático del agente.
 Ver [PLAN.md](PLAN.md), la bitácora [docs/experimentos.md](docs/experimentos.md) y las notas
 de teoría [docs/nat-traversal.md](docs/nat-traversal.md).
@@ -21,7 +21,7 @@ de teoría [docs/nat-traversal.md](docs/nat-traversal.md).
 | Carpeta | Qué es |
 |---|---|
 | `core/stun` | STUN (RFC 5389) a mano + clasificación de NAT |
-| `core/natlab` | Experimento: cómo reparte puertos el NAT (¿sirve la fuerza bruta?) |
+| `core/natlab` | Experimento: cómo reparte puertos el NAT (¿sirve el camino iterativo?) |
 | `core/punch` | Hole punching: candidatos (STUN, UPnP, IPv6, LAN), PING/PONG, keepalive |
 | `core/tunnel` | QUIC (`quic-go`) sobre el socket del punching |
 | `core/sshserver` / `core/sshclient` | SSH embebido (solo llave pública, pty, tmux) |

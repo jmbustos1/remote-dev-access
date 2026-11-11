@@ -90,7 +90,7 @@ func (c *packetConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 		// lo retransmite; para entonces el keepalive puede haber reconectado.
 		return len(p), nil
 	}
-	if _, err := c.s.conn.WriteToUDPAddrPort(p, peer); err != nil {
+	if _, err := c.s.sock().WriteToUDPAddrPort(p, peer); err != nil {
 		// Mismo criterio: un error de red transitorio (p. ej. Android cortando la
 		// red unos segundos) no debe matar la conexión QUIC.
 		return len(p), nil
@@ -100,7 +100,7 @@ func (c *packetConn) WriteTo(p []byte, _ net.Addr) (int, error) {
 
 func (c *packetConn) Close() error { return nil } // el socket es de la Session
 func (c *packetConn) LocalAddr() net.Addr {
-	return c.s.conn.LocalAddr()
+	return c.s.sock().LocalAddr()
 }
 
 func (c *packetConn) SetDeadline(t time.Time) error    { return c.SetReadDeadline(t) }

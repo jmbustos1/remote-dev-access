@@ -19,7 +19,7 @@ const usage = `rda — cliente de remote-dev-access
 
 Uso:
   rda stun [flags]    pregunta a servidores STUN cómo te ve internet
-  rda natlab [flags]  experimento: cómo reparte puertos el NAT (fuerza bruta sí/no)
+  rda natlab [flags]  experimento: cómo reparte puertos el NAT (camino iterativo sí/no)
   rda punch [flags]   hole punching manual + mini chat P2P
   rda devices         lista los dispositivos de la señalización
   rda connect <pc>    conecta con un PC vía señalización + chat

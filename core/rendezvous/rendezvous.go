@@ -59,6 +59,47 @@ type message struct {
 	Session    string `json:"session"`
 	Candidates string `json:"candidates"`
 	Order      string `json:"order,omitempty"` // solo en la offer: ver OrderListenerFirst
+	// NAT de quien envía (punch.NATEIM / punch.NATSym), en offer y answer. Con uno
+	// simétrico y el otro no, se suma el camino iterativo (ver iterRole).
+	NAT string `json:"nat,omitempty"`
+	// Sweep (kind "sweep"): el lado simétrico ya abrió sus sockets y le dice al
+	// otro dónde barrer.
+	Sweep *punch.SweepInfo `json:"sweep,omitempty"`
+}
+
+// Papel de un lado en el camino iterativo (docs/nat-traversal.md §4.3).
+const (
+	roleNone  = ""      // no aplica: el punching normal basta, o el otro lado es un agente antiguo
+	roleSpray = "spray" // somos el simétrico: abrimos muchos sockets
+	roleSweep = "sweep" // el simétrico es el otro: barremos sus puertos
+	roleRelay = "relay" // los dos simétricos: solo un relay (fase 5e) o un puerto reenviado
+)
+
+// iterRole decide el papel según el tipo de NAT de cada lado. No depende de
+// quién llama: el simétrico puede ser el agente.
+func iterRole(own, peer string) string {
+	switch {
+	case own == punch.NATSym && peer == punch.NATSym:
+		return roleRelay
+	case own == punch.NATSym && peer == punch.NATEIM:
+		return roleSpray
+	case own == punch.NATEIM && peer == punch.NATSym:
+		return roleSweep
+	}
+	return roleNone
+}
+
+// spray abre los sockets del lado simétrico y le avisa al otro dónde barrer.
+func spray(c *signaling.Client, to, session string, s *punch.Session, candidates string) {
+	log := logx.For(logx.StagePunch)
+	info, err := s.Spray(candidates, punch.SpraySockets)
+	if err != nil {
+		log.Warn("camino iterativo: no se pudo iniciar", "err", err)
+		return
+	}
+	if err := c.Signal(to, message{Kind: "sweep", Session: session, Sweep: &info}); err != nil {
+		log.Warn("camino iterativo: no se pudo avisar al otro lado", "to", to, "err", err)
+	}
 }
 
 func newID() string {
@@ -79,6 +120,8 @@ type ListenerConfig struct {
 	// CloseIdle: cerrar la sesión de un cliente sin noticias por este tiempo
 	// (0 = SessionIdleClose).
 	CloseIdle time.Duration
+	// ListenUDP abre los sockets (nil = reales); para tests con natsim.
+	ListenUDP func(port uint16) (punch.Conn, error)
 	// STUNServers por defecto stun.DefaultServers (vacío en tests: sin STUN).
 	STUNServers []string
 	// OnEvent recibe los eventos de cada sesión. s puede ser nil en el primer
@@ -96,11 +139,12 @@ type Listener struct {
 
 	mu       sync.Mutex
 	sessions map[string]*punch.Session // por dispositivo remoto: una sesión activa cada uno
+	offers   map[string]message        // la offer de esa sesión (para cuando llegue su "sweep")
 }
 
 // Listen arranca el agente. Close lo detiene y cierra las sesiones.
 func Listen(cfg ListenerConfig) *Listener {
-	l := &Listener{cfg: cfg, sessions: map[string]*punch.Session{}}
+	l := &Listener{cfg: cfg, sessions: map[string]*punch.Session{}, offers: map[string]message{}}
 	sc := cfg.Signaling
 	userMsg := sc.OnMessage
 	sc.OnMessage = func(in signaling.Incoming) {
@@ -127,7 +171,22 @@ func (l *Listener) Close() {
 func (l *Listener) handle(in signaling.Incoming) {
 	log := logx.For(logx.StageSignaling)
 	var m message
-	if err := json.Unmarshal(in.Data, &m); err != nil || m.Kind != "offer" {
+	if err := json.Unmarshal(in.Data, &m); err != nil {
+		return
+	}
+	if m.Kind == "sweep" && m.Sweep != nil {
+		l.mu.Lock()
+		s, offer := l.sessions[in.From], l.offers[in.From]
+		l.mu.Unlock()
+		if s == nil || offer.Session != m.Session {
+			return
+		}
+		if err := s.Sweep(offer.Candidates, *m.Sweep); err != nil {
+			log.Warn("barrido rechazado", "from", in.From, "err", err)
+		}
+		return
+	}
+	if m.Kind != "offer" {
 		return
 	}
 	log.Info("offer recibida", "from", in.From, "session", m.Session)
@@ -154,6 +213,7 @@ func (l *Listener) handle(in signaling.Incoming) {
 		UPnP:        l.cfg.UPnP,
 		Port:        l.cfg.Port,
 		CloseIdle:   cmp.Or(l.cfg.CloseIdle, SessionIdleClose),
+		ListenUDP:   l.cfg.ListenUDP,
 		OnEvent: func(e punch.Event) {
 			if l.cfg.OnEvent != nil {
 				holder.Lock()
@@ -176,17 +236,19 @@ func (l *Listener) handle(in signaling.Incoming) {
 		old.Close() // llegó otra offer del mismo dispositivo mientras abríamos esta
 	}
 	l.sessions[in.From] = s
+	l.offers[in.From] = m
 	l.mu.Unlock()
 	go func() { // al cerrarse (p. ej. abandonada), sacarla del mapa
 		<-s.Done()
 		l.mu.Lock()
 		if l.sessions[in.From] == s {
 			delete(l.sessions, in.From)
+			delete(l.offers, in.From)
 		}
 		l.mu.Unlock()
 	}()
 
-	if err := l.client.Signal(in.From, message{Kind: "answer", Session: m.Session, Candidates: s.CandidatesString()}); err != nil {
+	if err := l.client.Signal(in.From, message{Kind: "answer", Session: m.Session, Candidates: s.CandidatesString(), NAT: s.NAT()}); err != nil {
 		log.Warn("no se pudo enviar la answer", "to", in.From, "err", err)
 		return
 	}
@@ -195,8 +257,20 @@ func (l *Listener) handle(in signaling.Incoming) {
 		wait = 0
 		log.Info("reintento con el orden invertido: disparo primero", "from", in.From)
 	}
+	role := iterRole(s.NAT(), m.NAT)
+	if role == roleSpray {
+		wait = 0 // el simétrico dispara primero siempre
+	}
 	if err := s.ConnectAfter(m.Candidates, wait); err != nil {
 		log.Warn("candidatos inválidos en la offer", "from", in.From, "err", err)
+	}
+	switch role {
+	case roleSpray:
+		spray(l.client, in.From, m.Session, s, m.Candidates)
+	case roleSweep:
+		log.Info("el cliente tiene NAT simétrico: espero sus datos para barrer", "from", in.From)
+	case roleRelay:
+		log.Warn("los dos lados tienen NAT simétrico: solo conectará si hay un puerto reenviado", "from", in.From)
 	}
 	if l.cfg.OnSession != nil {
 		go l.cfg.OnSession(in.From, s)
@@ -211,6 +285,8 @@ type DialerConfig struct {
 	Signaling   signaling.ClientConfig
 	UPnP        bool
 	STUNServers []string // por defecto stun.DefaultServers
+	// ListenUDP abre los sockets (nil = reales); para tests con natsim.
+	ListenUDP func(port uint16) (punch.Conn, error)
 }
 
 // Dialer mantiene una conexión de señalización para listar PCs y conectarse.
@@ -220,13 +296,14 @@ type Dialer struct {
 
 	mu      sync.Mutex
 	answers map[string]chan message
+	sweeps  map[string]func(punch.SweepInfo) // por sesión: qué hacer cuando el otro lado pide barrer
 	lists   []chan []signaling.DeviceStatus
 	errs    []chan string
 }
 
 // NewDialer arranca la señalización del lado cliente.
 func NewDialer(cfg DialerConfig) *Dialer {
-	d := &Dialer{cfg: cfg, answers: map[string]chan message{}}
+	d := &Dialer{cfg: cfg, answers: map[string]chan message{}, sweeps: map[string]func(punch.SweepInfo){}}
 	sc := cfg.Signaling
 	userMsg := sc.OnMessage
 	sc.OnMessage = func(in signaling.Incoming) {
@@ -252,9 +329,17 @@ func (d *Dialer) route(in signaling.Incoming) {
 		d.lists = nil
 	case "signal":
 		var m message
-		if json.Unmarshal(in.Data, &m) == nil && m.Kind == "answer" {
+		if json.Unmarshal(in.Data, &m) != nil {
+			return
+		}
+		switch {
+		case m.Kind == "answer":
 			if ch := d.answers[m.Session]; ch != nil {
 				ch <- m
+			}
+		case m.Kind == "sweep" && m.Sweep != nil:
+			if f := d.sweeps[m.Session]; f != nil {
+				go f(*m.Sweep)
 			}
 		}
 	case "error":
@@ -296,7 +381,7 @@ func (d *Dialer) Connect(ctx context.Context, pc string, onEvent func(punch.Even
 	// Intento 1: el cliente dispara primero (el agente espera ListenerFirstShot).
 	s, err := d.attempt(ctx, pc, OrderDialerFirst, FirstAttempt, onEvent)
 	if err == nil || !errors.Is(err, errNoPunch) || ctx.Err() != nil {
-		return s, err
+		return s, err // errNoIter no se reintenta: ver su comentario
 	}
 	// Intento 2: sockets nuevos y el orden invertido.
 	logx.For(logx.StagePunch).Info("el primer intento no conectó: reintento con el orden invertido", "pc", pc, "tras", FirstAttempt)
@@ -306,6 +391,10 @@ func (d *Dialer) Connect(ctx context.Context, pc string, onEvent func(punch.Even
 // errNoPunch: hubo answer pero el hole punching no conectó a tiempo (vale la
 // pena reintentar con otro orden; un PC desconectado, no).
 var errNoPunch = errors.New("el hole punching no conectó")
+
+// errNoIter: un lado tiene NAT simétrico y tampoco conectó con el camino
+// iterativo. Cambiar el orden de los disparos no lo arregla: no se reintenta.
+var errNoIter = errors.New("un lado tiene NAT simétrico")
 
 func (d *Dialer) attempt(ctx context.Context, pc, order string, punchTimeout time.Duration, onEvent func(punch.Event)) (*punch.Session, error) {
 	log := logx.For(logx.StageSignaling)
@@ -317,6 +406,7 @@ func (d *Dialer) attempt(ctx context.Context, pc, order string, punchTimeout tim
 	s, err := punch.Open(ctx, punch.Config{
 		STUNServers: servers,
 		UPnP:        d.cfg.UPnP,
+		ListenUDP:   d.cfg.ListenUDP,
 		OnEvent: func(e punch.Event) {
 			if e.Kind == punch.EvConnected {
 				select {
@@ -344,6 +434,7 @@ func (d *Dialer) attempt(ctx context.Context, pc, order string, punchTimeout tim
 	defer func() {
 		d.mu.Lock()
 		delete(d.answers, id)
+		delete(d.sweeps, id)
 		for i, ch := range d.errs {
 			if ch == errs {
 				d.errs = append(d.errs[:i], d.errs[i+1:]...)
@@ -354,7 +445,7 @@ func (d *Dialer) attempt(ctx context.Context, pc, order string, punchTimeout tim
 	}()
 
 	log.Info("enviando offer", "to", pc, "session", id, "order", order)
-	if err := d.client.Signal(pc, message{Kind: "offer", Session: id, Candidates: s.CandidatesString(), Order: order}); err != nil {
+	if err := d.client.Signal(pc, message{Kind: "offer", Session: id, Candidates: s.CandidatesString(), Order: order, NAT: s.NAT()}); err != nil {
 		return fail(err)
 	}
 
@@ -373,14 +464,41 @@ func (d *Dialer) attempt(ctx context.Context, pc, order string, punchTimeout tim
 	if order == OrderListenerFirst {
 		hold = DialerHold
 	}
+	role := iterRole(s.NAT(), m.NAT)
+	if role == roleSpray {
+		hold = 0 // el simétrico dispara primero siempre
+	}
+	if role == roleSweep {
+		d.mu.Lock()
+		d.sweeps[id] = func(info punch.SweepInfo) {
+			if err := s.Sweep(m.Candidates, info); err != nil {
+				log.Warn("barrido rechazado", "from", pc, "err", err)
+			}
+		}
+		d.mu.Unlock()
+	}
 	if err := s.ConnectAfter(m.Candidates, hold); err != nil {
 		return fail(err)
+	}
+	if role == roleSpray {
+		spray(d.client, pc, id, s, m.Candidates)
+	}
+	if role != roleNone {
+		// Con un NAT simétrico el reintento con el orden invertido no aporta: se
+		// le da a este intento todo el tiempo (el barrido son unos segundos).
+		punchTimeout = ConnectTimeout
 	}
 
 	select {
 	case <-connected:
 		return s, nil
 	case <-time.After(punchTimeout):
+		switch role {
+		case roleRelay:
+			return fail(fmt.Errorf("%w: lo tienen este lado y %s; sin un puerto reenviado solo conectaría un relay", errNoIter, pc))
+		case roleSpray, roleSweep:
+			return fail(fmt.Errorf("%w y el camino iterativo no acertó con %s en %s", errNoIter, pc, punchTimeout))
+		}
 		return fail(fmt.Errorf("%w con %s en %s", errNoPunch, pc, punchTimeout))
 	case <-ctx.Done():
 		return fail(ctx.Err())

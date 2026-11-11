@@ -42,6 +42,38 @@ func TestClassifyMapping(t *testing.T) {
 	}
 }
 
+func TestPublicIPs(t *testing.T) {
+	pub2 := netip.MustParseAddr("203.0.113.8")
+	other := func(dest netip.AddrPort, mapped uint16) Obs {
+		return Obs{Dest: dest, Local: 5000, Mapped: netip.AddrPortFrom(pub2, mapped)}
+	}
+	// Los dos puertos de Google salen por la misma IP; Cloudflare por otra.
+	in := []Obs{obs(g1, 5000, 40001), obs(g2, 5000, 40002), other(cf, 40003), {Dest: cf, Err: net.ErrClosed}}
+	ips := PublicIPs(in)
+	if len(ips) != 2 || ips[0] != (IPCount{pub, 2}) || ips[1] != (IPCount{pub2, 1}) {
+		t.Errorf("IPs: %v", ips)
+	}
+	if same, pairs := SameDestSameIP(in); !same || pairs != 1 {
+		t.Errorf("por destino: same=%v pairs=%d", same, pairs)
+	}
+	if same, _ := SameDestSameIP([]Obs{obs(g1, 5000, 40001), other(g2, 40002)}); same {
+		t.Error("misma IP destino con IPs públicas distintas debería dar false")
+	}
+
+	r := &Result{A: in, Mapping: ClassifyMapping(in), IPs: ips,
+		Alloc: AnalyzeAllocation(series(32, func(i int) uint16 { return uint16(50000 + i) },
+			func(i int) uint16 { return uint16(1024 + (i*7919)%fullRange) }))}
+	txt := r.Text()
+	for _, want := range []string{"IPs públicas: 2 en 3 destinos", "se elige por destino", "usa 2 IPs públicas", "~2322 disparos"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("falta %q en el reporte:\n%s", want, txt)
+		}
+	}
+	if anon := r.TextAnon(); strings.Contains(anon, "203.0.113.") || !strings.Contains(anon, "PUB1 ×2, PUB2 ×1") {
+		t.Errorf("TextAnon dejó IPs o no contó bien:\n%s", anon)
+	}
+}
+
 func series(n int, local func(i int) uint16, mapped func(i int) uint16) []Obs {
 	var out []Obs
 	for i := 0; i < n; i++ {

@@ -1,12 +1,13 @@
 // Package natlab mide cómo se porta el NAT de la red actual, para decidir si la
-// fuerza bruta de puertos (paradoja del cumpleaños) puede funcionar antes de
+// camino iterativo (barrer puertos: paradoja del cumpleaños) puede funcionar antes de
 // gastar el relay. Solo usa servidores STUN públicos: no hace falta el PC ni
 // tocar el router. Ver docs/nat-traversal.md.
 //
 // Mide dos cosas:
 //
 //	A. Un socket, varios destinos → ¿el puerto público cambia según el destino?
-//	   (independiente / depende de la IP / depende de IP y puerto)
+//	   (independiente / depende de la IP / depende de IP y puerto) y ¿cuántas
+//	   IPs públicas distintas aparecen?
 //	B. Muchos sockets, un destino → ¿cómo reparte puertos el NAT entre sockets?
 //	   (conserva el puerto / secuencial / por bloque / al azar) y ¿siempre la misma IP?
 package natlab
@@ -35,13 +36,34 @@ type Target struct {
 	Port int
 }
 
-// DefaultTargets: dos puertos de Google (misma IP) y tres operadores distintos.
+// DefaultTargets: pares de puertos en la misma IP (Google, Nextcloud) y una
+// veintena de operadores en redes distintas. Con muchos destinos se ve, además
+// del mapeo, cuántas IPs públicas usa el NAT: un CGNAT puede elegir la IP según
+// el destino, y con 5 destinos no se distingue un pool de 2 de uno de 4.
+// Todos respondían el 2026-11-11; uno caído solo cuesta ~3 s y no invalida nada.
 var DefaultTargets = []Target{
 	{"google", "stun.l.google.com", 19302},
 	{"google", "stun.l.google.com", 3478},
 	{"cloudflare", "stun.cloudflare.com", 3478},
 	{"twilio", "global.stun.twilio.com", 3478},
 	{"nextcloud", "stun.nextcloud.com", 3478},
+	{"nextcloud", "stun.nextcloud.com", 443},
+	{"sipgate", "stun.sipgate.net", 3478},
+	{"blackberry", "stun.voip.blackberry.com", 3478},
+	{"schlund", "stun.schlund.de", 3478},
+	{"voipgate", "stun.voipgate.com", 3478},
+	{"antisip", "stun.antisip.com", 3478},
+	{"dus", "stun.dus.net", 3478},
+	{"epygi", "stun.epygi.com", 3478},
+	{"sonetel", "stun.sonetel.com", 3478},
+	{"voys", "stun.voys.nl", 3478},
+	{"freeswitch", "stun.freeswitch.org", 3478},
+	{"framasoft", "stun.framasoft.org", 3478},
+	{"telnyx", "stun.telnyx.com", 3478},
+	{"linphone", "stun.linphone.org", 3478},
+	{"hot-chilli", "stun.hot-chilli.net", 3478},
+	{"siptrunk", "stun.siptrunk.com", 3478},
+	{"acronis", "stun.acronis.com", 3478},
 }
 
 // Config del experimento.
@@ -71,6 +93,7 @@ type Result struct {
 	A       []Obs
 	B       []Obs
 	Mapping MappingKind
+	IPs     []IPCount // IPs públicas vistas en la parte A y hacia cuántos destinos
 	Alloc   Allocation
 }
 
@@ -108,6 +131,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 	conn.Close()
 	res.Mapping = ClassifyMapping(res.A)
+	res.IPs = PublicIPs(res.A)
 
 	// B. Un socket nuevo cada Interval, todos al primer destino. Los sockets
 	// quedan abiertos hasta el final para que el NAT no recicle puertos.
@@ -154,6 +178,9 @@ func resolve(ctx context.Context, ts []Target) ([]netip.AddrPort, []string, erro
 			ips[t.Host] = ip
 		}
 		d := netip.AddrPortFrom(ip, uint16(t.Port))
+		if slices.Contains(dests, d) {
+			continue // dos nombres que resuelven al mismo servidor: no aporta
+		}
 		dests = append(dests, d)
 		names = append(names, t.Name+" "+d.String())
 	}
@@ -232,6 +259,48 @@ func ClassifyMapping(obs []Obs) MappingKind {
 	return MapUnknown
 }
 
+// IPCount: una IP pública y cuántas respuestas la mostraron.
+type IPCount struct {
+	IP netip.Addr
+	N  int
+}
+
+// PublicIPs cuenta las IPs públicas distintas, en orden de aparición. Más de
+// una en la parte A = el NAT elige la IP según el destino: el otro lado no
+// sabe por cuál vamos a salir hacia él.
+func PublicIPs(obs []Obs) []IPCount {
+	var out []IPCount
+	for _, o := range obs {
+		if o.Err != nil {
+			continue
+		}
+		ip := o.Mapped.Addr()
+		i := slices.IndexFunc(out, func(c IPCount) bool { return c.IP == ip })
+		if i < 0 {
+			out = append(out, IPCount{IP: ip})
+			i = len(out) - 1
+		}
+		out[i].N++
+	}
+	return out
+}
+
+// SameDestSameIP mira los destinos que comparten IP (otro puerto): ¿salimos
+// hacia ellos por la misma IP pública? pairs es cuántos pares se compararon.
+func SameDestSameIP(obs []Obs) (same bool, pairs int) {
+	same = true
+	for i := range obs {
+		for j := i + 1; j < len(obs); j++ {
+			if obs[i].Err != nil || obs[j].Err != nil || obs[i].Dest.Addr() != obs[j].Dest.Addr() {
+				continue
+			}
+			pairs++
+			same = same && obs[i].Mapped.Addr() == obs[j].Mapped.Addr()
+		}
+	}
+	return same, pairs
+}
+
 // AllocKind: cómo elige el NAT el puerto público de cada socket nuevo.
 type AllocKind int
 
@@ -256,7 +325,7 @@ type Allocation struct {
 	Deltas    []int  // saltos de puerto entre sockets consecutivos (en orden de apertura)
 	MedianAbs int    // mediana de |salto|
 	Min, Max  uint16 // rango de puertos públicos vistos
-	Block     int    // tamaño estimado del rango efectivo (para la fuerza bruta)
+	Block     int    // tamaño estimado del rango efectivo (para el camino iterativo)
 }
 
 // Rango de puertos que un NAT suele usar al azar (1024–65535).
@@ -359,6 +428,22 @@ func (r *Result) Text() string {
 		writeObs(&b, o)
 	}
 	fmt.Fprintf(&b, "  → mapeo: %s\n", r.Mapping)
+	if len(r.IPs) > 0 {
+		answers := 0
+		var parts []string
+		for _, c := range r.IPs {
+			answers += c.N
+			parts = append(parts, fmt.Sprintf("%s ×%d", c.IP, c.N))
+		}
+		fmt.Fprintf(&b, "  → IPs públicas: %d en %d destinos (%s)\n", len(r.IPs), answers, strings.Join(parts, ", "))
+		if same, pairs := SameDestSameIP(r.A); len(r.IPs) > 1 && pairs > 0 {
+			if same {
+				fmt.Fprintf(&b, "  → misma IP destino → misma IP pública (%d/%d pares): la IP se elige por destino\n", pairs, pairs)
+			} else {
+				b.WriteString("  → la IP pública cambia incluso hacia la misma IP destino\n")
+			}
+		}
+	}
 	if d := deltasA(r.A); d != "" {
 		fmt.Fprintf(&b, "  → saltos de puerto entre destinos: %s\n", d)
 	}
@@ -385,20 +470,25 @@ func (r *Result) Text() string {
 	}
 	fmt.Fprintf(&b, "  → asignación: %s\n", a.Kind)
 
-	b.WriteString("\nC. Qué significa para la fuerza bruta\n")
+	b.WriteString("\nC. Qué significa para el camino iterativo\n")
 	switch {
 	case r.Mapping == MapIndependent:
 		b.WriteString("  No hace falta: el puerto no cambia por destino, el punching normal basta.\n")
 	case a.Answers < 4 || r.Mapping == MapUnknown:
 		b.WriteString("  Faltan datos: repetir el experimento.\n")
 	case len(a.PublicIPs) > 1:
-		b.WriteString("  Difícil: el NAT usa varias IPs públicas, el otro lado no sabe a cuál disparar.\n")
+		b.WriteString("  Difícil: sockets hacia un mismo destino salen por IPs públicas distintas; el otro lado no sabe a cuál disparar.\n")
 	default:
+		k := max(len(r.IPs), 1)
 		fmt.Fprintf(&b, "  Rango efectivo ≈ %d puertos.\n", a.Block)
+		if k > 1 {
+			fmt.Fprintf(&b, "  El NAT usa %d IPs públicas según el destino: el otro lado no sabe por cuál saldremos\n"+
+				"  hacia él y tiene que repartir los disparos entre las %d (cifras ya multiplicadas).\n", k, k)
+		}
 		for _, s := range []int{64, 256} {
-			m := ProbesFor(0.99, s, a.Block)
+			m := k * ProbesFor(0.99, s, a.Block)
 			fmt.Fprintf(&b, "  con %d sockets acá, el otro lado necesita ~%d disparos para 99 %% (con 1024: %.0f %%)\n",
-				s, m, 100*HitChance(s, 1024, a.Block))
+				s, m, 100*HitChance(s, 1024/k, a.Block))
 		}
 		if a.Kind == AllocSequential {
 			b.WriteString("  Secuencial: mejor que el azar, predecir el próximo puerto y probar una ventana chica.\n")
