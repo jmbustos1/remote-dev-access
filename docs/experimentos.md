@@ -129,3 +129,20 @@ Observaciones (logs de ambos lados con `-v` / Debug):
   paralelo para no retrasarla.
 - **Casa:** con IPv4 la casa es el lado EIM ideal. Sin UPnP, el problema es solo el filtrado
   estricto (ver nat-traversal.md §2). IPv6 no disponible con el router nuevo (el viejo sí tenía).
+
+### Mac por la zona Wi-Fi del celular → pc-casa (2026-11-11)
+
+Oficina: el celular por 4G y el Mac conectado a la zona Wi-Fi del celular. El celular entra a
+pc-casa sin problemas; el Mac no. `rda natlab` en el Mac: EIM, bloque de ~512 (64523–64981),
+siempre la misma IP. El firewall de macOS está desactivado.
+
+| Prueba | Resultado |
+|---|---|
+| pc-casa → Mac (agente en el Mac), 3 rondas | ✅ 3/3 (RTT ~46 ms) |
+| Mac → pc-casa (agente en pc-casa), 3 rondas | ❌ 0/3: ambos lados disparan ~150 PING, no cruza ninguno |
+| `rda punch` manual, el Mac dispara primero | ✅ conectado |
+| `rda punch` manual, pc-casa dispara primero | ❌ nada |
+| Mac → agente con espera de 1 s (`ConnectAfter`) | ✅ 3/3 |
+
+Causa: el NAT de Linux del celular (zona Wi-Fi) anota el PING entrante de pc-casa y, cuando el Mac
+escribe después, sale por otro puerto. Explicación completa en nat-traversal.md §9.

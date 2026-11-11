@@ -21,6 +21,7 @@ func cmdPunch(args []string) int {
 	peer := fs.String("peer", "", "direcciones del otro lado separadas por espacio; si se omite, se piden por teclado")
 	useUPnP := fs.Bool("upnp", true, "pedirle al router un puerto reenviado (UPnP)")
 	verbose := fs.Bool("v", false, "logs detallados (cada PING/PONG)")
+	port := fs.Uint("port", 0, "puerto UDP local fijo (0 = al azar)")
 	fs.Parse(args)
 	logx.Setup(os.Stderr, *verbose)
 
@@ -28,6 +29,7 @@ func cmdPunch(args []string) int {
 	s, err := punch.Open(context.Background(), punch.Config{
 		STUNServers: stun.DefaultServers,
 		UPnP:        *useUPnP,
+		Port:        uint16(*port),
 		OnEvent: func(e punch.Event) {
 			switch e.Kind {
 			case punch.EvPublic:

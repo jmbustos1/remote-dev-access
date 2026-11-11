@@ -123,6 +123,7 @@ type Session struct {
 	peer       netip.AddrPort          // dirección elegida (la que respondió)
 	seen       map[netip.AddrPort]bool // direcciones que nos han hablado en RDA1
 	punching   bool
+	holding    bool // ConnectAfter: esperando que el otro lado dispare primero
 	inbound    bool
 	connected  bool
 	seq        uint64
@@ -277,6 +278,21 @@ func ParseCandidates(text string) ([]netip.AddrPort, error) {
 
 // Connect empieza a disparar hacia todos los candidatos del otro lado. No bloquea.
 func (s *Session) Connect(candidates string) error {
+	return s.ConnectAfter(candidates, 0)
+}
+
+// ConnectAfter es Connect, pero el primer PING sale recién después de wait, o
+// antes si llega un paquete del otro lado (señal de que su NAT ya nos abrió la
+// puerta: se le responde al tiro).
+//
+// Para qué: hay NATs (el de Linux, p. ej. la zona Wi-Fi de Android) que, si les
+// llega un paquete NUESTRO antes de que su equipo haya escrito, anotan esa
+// conversación en su tabla; cuando su equipo nos escribe después, ya no pueden
+// usar el mismo puerto y salen por otro, que nuestro NAT descarta: el punching
+// queda trabado para siempre. Si el otro lado dispara primero, no pasa. El
+// agente (que responde la offer) espera; el cliente, que suele estar "en la
+// calle" detrás de esos NATs, dispara de inmediato. Ver docs/nat-traversal.md.
+func (s *Session) ConnectAfter(candidates string, wait time.Duration) error {
 	remote, err := ParseCandidates(candidates)
 	if err != nil {
 		return err
@@ -294,13 +310,48 @@ func (s *Session) Connect(candidates string) error {
 		logx.For(logx.StagePunch).Info("candidatos sumados al intento en curso", "candidatos", candidates)
 		return nil
 	}
-	s.remote, s.punching = remote, true
+	s.remote, s.punching, s.holding = remote, true, wait > 0
 	s.mu.Unlock()
 
-	logx.For(logx.StagePunch).Info("disparando hacia todos los candidatos del otro lado", "candidatos", candidates)
+	log := logx.For(logx.StagePunch)
+	if wait > 0 {
+		log.Info("candidatos del otro lado recibidos; espero a que dispare primero", "candidatos", candidates, "espera", wait)
+	} else {
+		log.Info("disparando hacia todos los candidatos del otro lado", "candidatos", candidates)
+	}
 	s.emit(Event{Kind: EvPunching, Addr: remote[0]})
-	go s.punchLoop()
+	go s.punchLoop(wait)
 	return nil
+}
+
+// waitFirstShot espera hasta wait, o hasta que llegue algo del otro lado o se
+// cierre la sesión. Devuelve false si la sesión se cerró.
+func (s *Session) waitFirstShot(wait time.Duration) bool {
+	end := time.After(wait)
+	t := time.NewTicker(20 * time.Millisecond)
+	defer t.Stop()
+	defer func() {
+		s.mu.Lock()
+		s.holding = false
+		s.mu.Unlock()
+	}()
+	for {
+		s.mu.Lock()
+		heard := s.inbound || s.connected
+		s.mu.Unlock()
+		if heard {
+			logx.For(logx.StagePunch).Info("el otro lado disparó primero: dejo de esperar")
+			return true
+		}
+		select {
+		case <-end:
+			logx.For(logx.StagePunch).Info("disparando hacia todos los candidatos del otro lado (terminó la espera)")
+			return true
+		case <-s.closeCh:
+			return false
+		case <-t.C:
+		}
+	}
 }
 
 // Send manda un mensaje de chat. Requiere estar conectado.
@@ -472,7 +523,7 @@ func (s *Session) handle(body string, from netip.AddrPort) {
 
 	if adopted {
 		s.emit(Event{Kind: EvPunching, Addr: from})
-		go s.punchLoop()
+		go s.punchLoop(0) // el otro lado ya nos escribió: no hay que esperar
 	}
 	if firstInbound {
 		log.Info("¡primer paquete del otro lado!", "from", from, "sender", sender)
@@ -563,7 +614,11 @@ func (s *Session) ping() {
 // --- Bucles ----------------------------------------------------------------
 
 // punchLoop dispara PINGs seguidos hasta conectar o agotar el disparo rápido.
-func (s *Session) punchLoop() {
+// Con wait > 0, primero espera a que el otro lado dispare (ver ConnectAfter).
+func (s *Session) punchLoop(wait time.Duration) {
+	if wait > 0 && !s.waitFirstShot(wait) {
+		return
+	}
 	deadline := time.Now().Add(PunchTimeout)
 	t := time.NewTicker(PunchInterval)
 	defer t.Stop()
@@ -641,7 +696,7 @@ func (s *Session) maintain() {
 				s.connected = false
 				s.lastPong = time.Time{}
 			}
-			active := s.peer.IsValid() || len(s.remote) > 0
+			active := (s.peer.IsValid() || len(s.remote) > 0) && !s.holding
 			s.mu.Unlock()
 			if lost {
 				log.Warn("conexión perdida: sin respuesta del otro lado", "silencio", time.Since(lastPong).Round(time.Second))

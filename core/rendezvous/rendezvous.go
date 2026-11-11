@@ -29,6 +29,11 @@ import (
 var (
 	AnswerTimeout  = 15 * time.Second
 	ConnectTimeout = 30 * time.Second
+	// ListenerFirstShot: cuánto espera el agente, tras mandar la answer, antes
+	// de su primer PING (salvo que el cliente dispare antes). El cliente dispara
+	// apenas recibe la answer; así su NAT anota la conversación primero (ver
+	// punch.Session.ConnectAfter). Medido: la answer tarda ~0,1–0,4 s en llegar.
+	ListenerFirstShot = time.Second
 )
 
 // message viaja dentro de "data" de un signal.
@@ -155,7 +160,7 @@ func (l *Listener) handle(in signaling.Incoming) {
 		log.Warn("no se pudo enviar la answer", "to", in.From, "err", err)
 		return
 	}
-	if err := s.Connect(m.Candidates); err != nil {
+	if err := s.ConnectAfter(m.Candidates, ListenerFirstShot); err != nil {
 		log.Warn("candidatos inválidos en la offer", "from", in.From, "err", err)
 	}
 	if l.cfg.OnSession != nil {

@@ -70,16 +70,24 @@ func TestDialerConnectsToListenerAndChats(t *testing.T) {
 	}
 	defer s.Close()
 
-	if err := s.Send("hola"); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case m := <-msgs:
-		if m != "eco: hola" {
-			t.Errorf("respuesta = %q", m)
+	// El chat no reintenta: si el agente aún no confirmó la ida y vuelta (espera
+	// ListenerFirstShot o un PING nuestro), el eco se pierde. Reintentamos.
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if err := s.Send("hola"); err != nil {
+			t.Fatal(err)
 		}
-	case <-ctx.Done():
-		t.Fatal("no llegó el eco")
+		select {
+		case m := <-msgs:
+			if m != "eco: hola" {
+				t.Errorf("respuesta = %q", m)
+			}
+			return
+		case <-tick.C:
+		case <-ctx.Done():
+			t.Fatal("no llegó el eco")
+		}
 	}
 }
 

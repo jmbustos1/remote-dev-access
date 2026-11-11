@@ -240,6 +240,46 @@ Y en un intento real conectó directo sin UPnP. Los logs mostraron además que e
 Un CGNAT EIM con bloque por cliente es lo que recomienda RFC 6888 (EIM para que funcionen las
 apps P2P; bloques para poder registrar quién usó qué puerto sin anotar cada conexión).
 
+## 9. El orden importa: NAT de Linux "envenenado" (2026-11-11)
+
+Caso real: el Mac conectado a la **zona Wi-Fi del celular** (4G) no lograba entrar a pc-casa, pero
+pc-casa sí entraba al Mac, por la misma red y en cualquier momento. `rda natlab` en el Mac decía
+que todo estaba bien (EIM, bloque de ~512, siempre la misma IP). Las 3 rondas de prueba dieron el
+mismo resultado: dirección A ✅ 3/3, dirección B ❌ 3/3.
+
+**Causa.** Entre el Mac y la operadora hay un NAT más: el de Android, que es el de Linux
+(`conntrack` + `MASQUERADE`). Ese NAT anota en su tabla **cualquier** paquete que le llega, también
+los que nadie pidió:
+```
+1. pc-casa dispara primero → su PING llega al celular antes de que el Mac haya escrito.
+2. conntrack anota la conversación  pc-casa:42197 ⇄ celular:P  (entrante, sin dueño).
+3. El Mac dispara a pc-casa:42197. MASQUERADE querría usar celular:P, pero esa
+   combinación ya está ocupada → elige OTRO puerto P'.
+4. pc-casa ve llegar al Mac (si llega) desde P', al que nunca le escribió → su router lo bota.
+   Los PING de pc-casa siguen yendo a P → el celular los bota.   ⇒ trabado para siempre.
+```
+Si el Mac escribe **primero**, conntrack anota la salida con P, y el PING de pc-casa entra por ahí.
+
+**Prueba de la hipótesis** (`rda punch` manual, con `-port` para que la dirección de pc-casa fuera
+predecible y así controlar el orden):
+
+| Prueba | Dispara primero | Resultado |
+|---|---|---|
+| 1 | el Mac (pc-casa 4 s después) | ✅ conectado, RTT 34–61 ms |
+| 2 | pc-casa (el Mac ~4 s después, durante 25 s) | ❌ no cruzó nada |
+
+**Arreglo.** El agente (que responde la offer) espera 1 s antes de su primer PING, o hasta que
+le llegue uno del cliente (`punch.Session.ConnectAfter`, `rendezvous.ListenerFirstShot`). El
+cliente dispara apenas recibe la answer. Resultado: Mac → pc-casa ✅ 3/3, a cambio de ~1 s más.
+
+**Lo que no cubre:** si el que está detrás de un NAT de Linux es el **agente** y el cliente tiene
+un router "normal", el orden ideal es el inverso. Para eso, la escalera de la fase 5: reintentar
+con sockets nuevos y el orden invertido, y al final el relay.
+
+**Lección:** que `natlab` diga "EIM" no basta. Mide el mapeo hacia servidores que *nosotros*
+contactamos primero; no ve qué pasa cuando el otro lado escribe antes. El orden de los disparos
+es parte del protocolo, no un detalle.
+
 ## Referencias
 
 - RFC 4787 — NAT Behavioral Requirements for Unicast UDP (mapeo y filtrado)
@@ -248,3 +288,4 @@ apps P2P; bloques para poder registrar quién usó qué puerto sin anotar cada c
 - RFC 6886 — NAT-PMP · RFC 6887 — PCP · RFC 6888 — Requisitos para CGN
 - BEP 55 — Holepunch extension (BitTorrent)
 - Tailscale, "How NAT traversal works" (blog técnico; fuerza bruta de puertos y DERP)
+- netfilter/conntrack de Linux: cómo MASQUERADE elige el puerto de origen cuando la tupla está ocupada
