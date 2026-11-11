@@ -146,3 +146,42 @@ siempre la misma IP. El firewall de macOS está desactivado.
 
 Causa: el NAT de Linux del celular (zona Wi-Fi) anota el PING entrante de pc-casa y, cuando el Mac
 escribe después, sale por otro puerto. Explicación completa en nat-traversal.md §9.
+
+### El 4G se volvió simétrico (2026-11-11, tarde)
+
+Mismo montaje de la mañana (Mac por la zona Wi-Fi del celular → pc-casa, agente con
+`c288357`), unas horas después. Ya no conecta ni el Mac ni el celular. pc-casa sigue en línea
+y responde cada offer; su answer trae solo `stun` y `local` (el router nuevo no tiene UPnP).
+
+`rda natlab -anon`, tres mediciones del 4G el mismo día:
+
+| Cuándo | Red | A. un socket → 5 destinos | B. 32 sockets → google | Mac → pc-casa |
+|---|---|---|---|---|
+| 11/11 mañana | zona Wi-Fi de mi celular | **EIM** | bloque ~512 (64523–64981) | ✅ 3/3 |
+| 11/11 14:05 | zona Wi-Fi de mi celular | **simétrico** (saltos +117 −29 −50 +197) | bloque ~256 (33794–34039) | ❌ 0/2 intentos |
+| 11/11 14:09 | zona Wi-Fi del celular de un colega (otra IP pública, la misma operadora: AS7418) | **simétrico** (saltos −126 +63 +81 −198) | bloque ~256 (12294–12533) | ❌ 0/1 intento |
+
+Cada intento prueba los dos órdenes (normal y `listener-first`). El celular, directo por 4G,
+tampoco conecta (sin logs de esa prueba).
+
+En los intentos fallidos los dos lados disparan PING durante 30 s y no cruza ninguno, ni
+el primero con el orden normal ni el reintento con `listener-first`. A diferencia de §9 de
+nat-traversal.md, aquí el orden no importa: el CGNAT asigna un puerto nuevo para cada destino,
+así que el Mac le escribe a pc-casa desde un puerto que nadie anunció, y el router de la casa
+(filtrado estricto) lo bota. Es la traza de nat-traversal.md §2, que el 10/11 parecía refutada.
+
+Observaciones:
+- **El tipo de NAT de la operadora no es fijo.** Mañana EIM, tarde simétrico, con la misma
+  operadora. Hipótesis (sin confirmar): salir por otro CGNAT (otra antena u otro pool), con otra
+  política de mapeo.
+- Las dos redes simétricas mantienen la asignación por bloque, aunque más chico (~256): el
+  CGNAT sigue reservando un rango por cliente, pero dentro de él elige un puerto por destino.
+- Para la fuerza bruta este es el caso bueno: el otro lado (pc-casa) conserva el puerto y el
+  bloque es chico. Según `natlab` §C, con 64 sockets acá, pc-casa necesitaría ~19 disparos para
+  99 %. Pero quien barre los puertos es el agente de pc-casa, así que sin actualizarlo no se
+  puede probar a distancia.
+- `rda stun` (un socket, 3 servidores) ya lo muestra en 2 s: si los puertos difieren entre
+  servidores, no vale la pena intentar sin UPnP, reenvío manual o relay.
+- **Lección:** una medición de `natlab` describe la red en ese momento, no a la operadora.
+  Medir justo antes de cada prueba, y que la escalera de la fase 5 no asuma el tipo de NAT por
+  la red.

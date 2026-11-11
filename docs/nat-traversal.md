@@ -240,6 +240,11 @@ Y en un intento real conectó directo sin UPnP. Los logs mostraron además que e
 Un CGNAT EIM con bloque por cliente es lo que recomienda RFC 6888 (EIM para que funcionen las
 apps P2P; bloques para poder registrar quién usó qué puerto sin anotar cada conexión).
 
+> **Corrección (2026-11-11, tarde).** "El 4G es EIM" vale para esa medición, no para la operadora.
+> Horas después de conectar 3/3, el mismo 4G midió **simétrico**, con bloque de ~256, y no conectó
+> en ningún orden. El celular de un colega con la misma operadora dio lo mismo. La fuerza bruta
+> sí hace falta para estas redes. Detalle en experimentos.md, "El 4G se volvió simétrico".
+
 ## 9. El orden importa: NAT de Linux "envenenado" (2026-11-11)
 
 Caso real: el Mac conectado a la **zona Wi-Fi del celular** (4G) no lograba entrar a pc-casa, pero
