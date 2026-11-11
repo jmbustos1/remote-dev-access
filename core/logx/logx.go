@@ -55,11 +55,59 @@ func Setup(w io.Writer, verbose bool, sink ...Sink) {
 	mu.Unlock()
 }
 
-// For devuelve un logger etiquetado con la etapa dada.
+// For devuelve un logger etiquetado con la etapa dada. El destino se resuelve
+// en cada registro, no al crear el logger: las goroutines de larga vida (el ciclo
+// de la señalización, el keepalive del punching) guardan su logger al arrancar,
+// y un Setup posterior también tiene que valer para ellas. Por ejemplo, rda ssh
+// silencia los logs al abrir la terminal; antes, esos loggers guardados seguían
+// escribiendo encima de tmux.
 func For(stage string) *slog.Logger {
+	return slog.New(dynamic{attrs: []slog.Attr{slog.String("stage", stage)}})
+}
+
+func current() slog.Handler {
 	mu.RLock()
 	defer mu.RUnlock()
-	return root.With("stage", stage)
+	return root.Handler()
+}
+
+// dynamic delega cada registro en el handler raíz vigente.
+type dynamic struct {
+	attrs  []slog.Attr
+	groups []string
+}
+
+func (d dynamic) resolve() slog.Handler {
+	h := current()
+	if len(d.attrs) > 0 {
+		h = h.WithAttrs(d.attrs)
+	}
+	for _, g := range d.groups {
+		h = h.WithGroup(g)
+	}
+	return h
+}
+
+func (d dynamic) Enabled(ctx context.Context, l slog.Level) bool {
+	return current().Enabled(ctx, l)
+}
+
+func (d dynamic) Handle(ctx context.Context, r slog.Record) error {
+	return d.resolve().Handle(ctx, r)
+}
+
+func (d dynamic) WithAttrs(as []slog.Attr) slog.Handler {
+	if len(d.groups) > 0 {
+		// Atributos dentro de un grupo: se fija el handler actual (caso raro).
+		return d.resolve().WithAttrs(as)
+	}
+	d.attrs = append(append([]slog.Attr{}, d.attrs...), as...)
+	return d
+}
+
+func (d dynamic) WithGroup(name string) slog.Handler {
+	d.groups = append(append([]string{}, d.groups...), name)
+	return d
 }
 
 func newLogger(w io.Writer, level slog.Level, sink Sink) *slog.Logger {

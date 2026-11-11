@@ -2,6 +2,7 @@ package logx
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 )
@@ -28,5 +29,30 @@ func TestSinkReceivesStageAndAttrs(t *testing.T) {
 	}
 	if !strings.Contains(text.String(), "stage=stun") {
 		t.Errorf("la salida de texto no tiene la etapa: %q", text.String())
+	}
+}
+
+// Un logger obtenido ANTES de Setup tiene que obedecer al Setup posterior
+// (es lo que hace rda ssh al abrir la terminal: silenciar los logs). Antes, las
+// goroutines de larga vida seguían escribiendo encima de tmux.
+func TestLoggerFollowsLaterSetup(t *testing.T) {
+	var before bytes.Buffer
+	Setup(&before, false)
+	defer Setup(nil, false)
+	log := For(StagePunch) // como el ciclo de la señalización o el keepalive
+
+	log.Info("uno")
+	Setup(io.Discard, false)
+	log.Warn("dos: no debería verse")
+
+	var after bytes.Buffer
+	Setup(&after, true)
+	log.Debug("tres", "k", "v")
+
+	if !strings.Contains(before.String(), "uno") || strings.Contains(before.String(), "dos") {
+		t.Errorf("antes: %q", before.String())
+	}
+	if got := after.String(); !strings.Contains(got, "tres") || !strings.Contains(got, "stage=punch") || !strings.Contains(got, "k=v") {
+		t.Errorf("después: %q", got)
 	}
 }

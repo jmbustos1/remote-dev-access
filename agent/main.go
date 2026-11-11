@@ -8,6 +8,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -40,6 +41,7 @@ func main() {
 	tmuxSession := flag.String("tmux", "rda", "sesión de tmux para clientes que no eligen una (el celular); rda ssh usa la de su nombre")
 	showVersion := flag.Bool("version", false, "imprime la versión y sale")
 	verbose := flag.Bool("v", false, "logs detallados (nivel debug)")
+	logFile := flag.String("log", "", "además de la terminal, agrega los logs a este archivo (permisos 600; útil para revisarlos por el túnel)")
 	flag.Parse()
 
 	if *showVersion {
@@ -59,7 +61,17 @@ func main() {
 		}
 		return
 	}
-	logx.Setup(os.Stderr, *verbose)
+	var logOut io.Writer = os.Stderr
+	if *logFile != "" {
+		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "-log:", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		logOut = io.MultiWriter(os.Stderr, f)
+	}
+	logx.Setup(logOut, *verbose)
 	if *port > 65535 {
 		fmt.Fprintln(os.Stderr, "-port debe estar entre 1 y 65535")
 		os.Exit(2)
