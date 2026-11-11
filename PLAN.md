@@ -12,24 +12,24 @@ en AWS y relay de respaldo bajo demanda.
 ## Arquitectura
 
 ```
-┌────────── APK (Android) ──────────┐                          ┌──────── PC (x3) ─────────┐
-│ Pestaña Terminal │ Pestaña Logs   │                          │ agente (servicio systemd) │
-│        └── core Go (gomobile) ────┼══ canal P2P (WebRTC) ════┼── core Go ──► sshd :22    │
-└───────────────┬───────────────────┘                          └────────────┬──────────────┘
+┌────────── APK / rda (cliente) ────┐                          ┌──────── PC (x3) ─────────┐
+│ xterm.js │ Logs │ Ajustes        │                          │ rda-agent                 │
+│    └── core Go (gomobile) ───────┼══ SSH ═ QUIC ═ UDP ══════┼── core Go ──► SSH embebido│
+└───────────────┬───────────────────┘   (hole punching)        └────────────┬──► pty → tmux│
                 │ WebSocket (wss)                                           │ WebSocket (ping 5 min)
                 └──────────► API Gateway WebSocket + Lambda + DynamoDB ◄────┘
                                      (señalización)
-                    STUN: Google (gratis) · Relay: EC2 t4g.nano bajo demanda (pion/turn)
+              STUN: públicos (gratis) · Relay: Fargate bajo demanda (fase 5e, pendiente)
 ```
 
 **Flujo de una conexión**
 
 1. El agente del PC mantiene un WebSocket abierto con API Gateway ("soy `pc-casa`, disponible").
-2. La APK abre su WebSocket y pide `connect pc-casa`.
-3. Ambos consultan STUN (UDP) para descubrir su `IP pública:puerto`.
-4. Intercambian candidatos (ICE) vía la Lambda.
-5. Hole punching → canal directo cifrado (DTLS). Si falla → relay TURN en la EC2.
-6. Sobre el canal: data channel WebRTC ↔ tubería TCP ↔ `sshd` del PC → `tmux attach` → `claude`.
+2. El cliente (APK o `rda ssh`) abre su WebSocket y manda una offer a `pc-casa`.
+3. Ambos consultan STUN (UDP) para descubrir su `IP pública:puerto` (más UPnP, IPv6 y LAN).
+4. Intercambian candidatos (offer/answer) vía la Lambda.
+5. Hole punching → QUIC sobre el mismo socket UDP. Si falla → relay (fase 5e, pendiente).
+6. Sobre QUIC: SSH contra el servidor embebido del agente → pty → `tmux` → `claude`.
 
 **Notas de diseño**
 
@@ -48,13 +48,13 @@ en AWS y relay de respaldo bajo demanda.
 ## Estructura del repo
 
 ```
-core/        Go: señalización, STUN, P2P (pion/webrtc), tubería TCP, cliente SSH, logs
-agent/       Go: binario del PC + unidad systemd
-cli/         Go: cliente de prueba (Termux / laptop)
+core/        Go: señalización, STUN, natlab, punch (hole punching), tunnel (QUIC), sshserver/sshclient, mobile, logs
+agent/       Go: rda-agent (corre en cada PC)
+cli/         Go: rda (stun, natlab, punch, devices, connect, ssh, keygen, token, signal-local)
 signaling/   Lambda (Go) + Terraform: API Gateway WebSocket, DynamoDB
-relay/       Terraform + pion/turn en EC2, encendido/apagado por la Lambda
-android/     Kotlin + Jetpack Compose: UI, terminal, logs; consume core.aar
-docs/        diagramas, notas de experimentos (resultados NAT 4G, etc.)
+relay/       (pendiente, fase 5e) contenedor Go + Terraform ECS/Fargate, arrancado por la Lambda
+android/     Kotlin + Jetpack Compose: UI, terminal (xterm.js), logs; consume core.aar
+docs/        operar.md, onboarding-pc.md, nat-traversal.md, experimentos.md, android.md
 ```
 
 ---
@@ -94,7 +94,7 @@ Cada fase termina en algo probable por sí solo.
 - Auth: token por dispositivo (hash en DynamoDB), validado en `$connect`.
 - **Hecho cuando:** `cli connect pc-casa` arma el canal sin copiar direcciones a mano.
 
-### Fase 4 — Terminal por el canal ✅ (código listo 2026-11-01; falta probar en el celular)
+### Fase 4 — Terminal por el canal ✅ (probado desde el celular por 4G el 2026-11-02)
 - Cambio de plan: en vez de `pion/webrtc` (que traería su propio ICE y tiraría el
   hole punching hecho a mano), **QUIC (`quic-go`) sobre el mismo socket del punching**.
   `punch.Session.PacketConn()` separa STUN / RDA1 / QUIC por la forma del paquete.
@@ -109,14 +109,16 @@ Cada fase termina en algo probable por sí solo.
   La llave SSH se genera en el celular (privada cifrada con el Keystore).
 - CLI: `rda keygen` y `rda ssh <pc> [comando]` (probado en local: pty + tmux OK).
 - **Hecho cuando:** desde la APK en 4G → terminal → tmux → Claude. **Primer hito usable.**
-- Pendiente: agente como servicio systemd.
+- Después (2026-11-10): una sesión de tmux por dispositivo cliente; `rda ssh` desde otro PC con
+  identidad propia (`pc-casa-cli`, `macbook-cli`). Ver docs/operar.md.
+- Arranque automático del agente: fase 5f.
 
 ### Fase 5 — Conectar en cualquier red (escalera de caminos)
 > Motivo (2026-11-09): el router nuevo de la casa no tiene UPnP/NAT-PMP/PCP y desde 4G dejó de
-> conectar. **Corrección 2026-11-10:** `rda natlab` mostró que el 4G es EIM (no simétrico), igual
-> que la casa: el punching normal debería bastar y la causa real está por diagnosticar. La
-> escalera sigue siendo el diseño para redes ajenas (oficinas, PCs de terceros).
-> Teoría completa y cuentas en [docs/nat-traversal.md](docs/nat-traversal.md).
+> conectar. El 10/11 `rda natlab` midió el 4G como EIM; el 11/11 por la tarde el mismo 4G midió
+> **simétrico** y no conectó en ningún orden, igual que la oficina (simétrico, puertos al azar).
+> **El tipo de NAT no es una propiedad de la red: se mide en cada intento.** Teoría y mediciones
+> en [docs/nat-traversal.md](docs/nat-traversal.md) y [docs/experimentos.md](docs/experimentos.md).
 
 Regla: **P2P primero, relay solo de respaldo** (como WebRTC/TURN o Tailscale/DERP).
 
@@ -140,11 +142,16 @@ t = 90 s    nada → FRACASO TOTAL: la app muestra el motivo de cada escalón
 | 2. Fuerza bruta | 2 rondas sin acierto (~5 s), o se salta | con ~98 % por ronda, dos fallos seguidos = falla una condición de fondo |
 | 3. Relay | sin conexión a t = 90 s | margen para el arranque en frío de Fargate |
 
-- **Saltar la fuerza bruta** si los dos lados son simétricos (probabilidad ~0), o si ya falló
-  antes en esta red. Se recuerda por PC qué escalón ganó la última vez y se empieza por ahí.
-- **Arranque especulativo del relay** apenas falla el escalón 1: Fargate cobra por segundo (mínimo
-  1 min), así que arrancarlo "por si acaso" cuesta fracciones de centavo.
-- **Sesión caída** (sin PONG 20 s): repetir la escalera desde el escalón que ganó la última vez.
+Los tiempos del diagrama son el diseño. **Lo que hace el código hoy** (escalón 1 solamente): intento
+normal de 5 s (`FirstAttempt`) y, si no conecta, reintento con sockets nuevos y orden invertido
+hasta 30 s (`ConnectTimeout`). Dónde encaja el escalón 2 respecto de ese reintento es una decisión
+pendiente de 5d.
+
+- **Saltar la fuerza bruta** si los dos lados son simétricos (probabilidad ~0): pasar al relay.
+  No se recuerda nada por red: el 4G cambió de tipo el mismo día, así que se mide en cada intento.
+- **Arranque especulativo del relay** apenas falla el escalón 1, o de inmediato si la offer/answer
+  ya dicen "simétrico + al azar": Fargate cobra por segundo (mínimo 1 min), fracciones de centavo.
+- **Sesión caída** (sin PONG 20 s): repetir la escalera desde el principio, con medición nueva.
 - **Después:** estando en relay, seguir probando el directo en segundo plano y migrar sin cortar
   (QUIC no se entera del cambio de camino).
 
@@ -152,7 +159,9 @@ Piezas:
 - [x] **5a. Puerto fijo** (`rda-agent -port` / `RDA_PORT`) para un reenvío manual en el router.
 - [x] **5b. Experimento** `rda natlab` / Pruebas → "Experimento NAT" (core/natlab): mide mapeo por
   destino y asignación de puertos entre sockets. Resultados en docs/experimentos.md.
-- [ ] **5c. IPv6:** revisar router nuevo y APN del celular (`IPv4/IPv6`). Sin código.
+- [x] **5c. IPv6:** cerrado como *no disponible*: la operadora no entrega IPv6 (01/11 y 11/11) y el
+  router nuevo tampoco (10/11). El código ya lo usa como candidato cuando existe. Reabrir solo si
+  cambia el router o el APN del celular.
 - [x] **5c'. Diagnóstico:** 4G → casa sin UPnP conecta directo (2026-11-10). La falla de la tarde
   anterior quedó sin explicar. Mejora pendiente: UPnP en paralelo (hoy retrasa la answer 2 s).
 - [x] **Orden de los disparos** (2026-11-11): el agente espera 1 s para que el cliente dispare
@@ -160,12 +169,36 @@ Piezas:
   Cubre los NAT de Linux (zona Wi-Fi de Android) en cualquiera de los dos lados. Ver
   nat-traversal.md §9. El agente también cierra las sesiones sin noticias tras 4 min.
 - [ ] **5d. Fuerza bruta** como candidato (multi-socket en `core/punch`, tipo de NAT en la offer).
-  En pausa: el 4G medido es EIM. Útil solo si aparece una red simétrica (oficina, otra operadora).
-- [ ] **5e. Relay propio en Fargate bajo demanda:** contenedor Go chico (no TURN completo);
-  `RDA1 RELAY <sesión> <firma HMAC>` empareja a los dos lados y luego reenvía bytes tal cual
-  (SSH va cifrado de punta a punta: el relay solo ve bytes cifrados). Tarea con IP pública
-  propia (sin NLB ni NAT Gateway), Fargate Spot ARM, VPC por defecto, apagado tras 10 min
-  sin tráfico. Verificar precios reales antes de construir.
+  **Necesaria** desde el 11/11 (ver cabecera); es el siguiente paso después de 5f. Falta el diseño.
+  Preguntas que tiene que responder antes de escribir código:
+  - Qué campos nuevos llevan la offer y la answer (tipo de NAT y rango medido), quién mide y
+    cuánto retrasa cada intento.
+  - N sockets y M disparos según el rango medido (las cifras del diagrama suponen puertos al azar;
+    con bloque chico son otras, y N no puede superar el bloque).
+  - Qué pasa con los roles invertidos (el simétrico es el agente).
+  - Cómo se combina con el orden de disparos de nat-traversal.md §9.
+  - Cómo el socket ganador pasa a ser el de la sesión y qué se hace con los demás (QUIC va encima).
+  - Criterio de "hecho" reproducible, dado que el 4G cambia de tipo durante el día.
+- [ ] **5e. Relay propio en Fargate bajo demanda.** **Va al final**, después de usar 5d/5f en el
+  día a día y estar conforme con el producto. Decisiones ya tomadas para cuando toque:
+  - Contenedor Go chico (no TURN completo): `RDA1 RELAY <sesión> <firma HMAC>` empareja a los
+    dos lados y luego reenvía bytes tal cual (SSH va cifrado de punta a punta).
+  - **Llave HMAC:** la genera la Lambda por sesión de relay y la entrega a cada lado por la
+    señalización, que ya está autenticada por token. Sin secreto compartido previo ni cambios
+    en DynamoDB.
+  - **Mensajes nuevos de señalización:** `{"action":"relay","session":…}` del cliente → la Lambda
+    arranca la tarea y responde `{"type":"relay","addr":"IP:puerto","session":…,"key":…}` a los
+    dos lados.
+  - **Encaje en el core:** candidato `relay` sobre el mismo socket de `punch.Session`; el relay es
+    un peer que siempre responde, así que "migrar sin cortar" sale gratis (QUIC no se entera).
+  - **Infra:** módulo Terraform `ecs` (cluster + task definition Fargate Spot ARM con IP pública
+    propia, sin NLB ni NAT Gateway, VPC por defecto) y permiso `ecs:RunTask` a la Lambda. La
+    propia tarea se termina tras 10 min sin tráfico.
+  - Verificar precios reales (Fargate Spot + IPv4 pública) antes de construir.
+- [ ] **5f. Arranque automático del agente** (primero de todo: desbloquea actualizar y reiniciar
+  el agente de un PC desde fuera). `launchd` (LaunchAgent de usuario) en el Mac y `systemd --user`
+  en el ThinkPad; `Restart=always`; logs a `~/.config/rda/agent.log`. Lee `~/.config/rda/agent.env`.
+  **Hecho cuando:** tras reiniciar el PC, aparece en línea sin tocar nada, y `rda ssh` entra.
 - **Hecho cuando:** desde 4G conecta a la casa sin UPnP, y a un PC en una red cualquiera.
 
 ### Fase 6 — APK
@@ -175,8 +208,8 @@ Piezas:
 - Kotlin + Jetpack Compose; `core` compilado con `gomobile bind` → `core.aar`.
 - Pestañas: **Terminal · Logs · Ajustes** (+ **Pruebas** durante el desarrollo).
 - Cliente SSH dentro del core (`golang.org/x/crypto/ssh`) → no depende de Termux.
-- **Pestaña Terminal:** emulador (`terminal-view` / `terminal-emulator` de Termux, Apache 2.0),
-  lista de PCs con estado online/offline, botón conectar.
+- **Pestaña Terminal:** xterm.js en un WebView (se descartó el emulador de Termux) + barra de
+  teclas; pestaña PCs con estado en línea/desconectado y botón conectar.
 - **Pestaña Logs:**
   - Eventos del core vía callback: timestamp, nivel, etapa
     (`signaling` · `stun` · `ice` · `punch` · `relay` · `ssh`).
@@ -205,9 +238,9 @@ Piezas:
   obtiene su token y envía su llave pública SSH al PC.
 - Logs del agente en `journalctl`; opcional: enviar últimos logs del PC a la APK para debug.
 
-**Orden:** 0 → 1 (hecho) → **APK mínima** (pestañas Pruebas + Logs + Ajustes, botón "Probar
-STUN") → 2 → 3 → 4, agregando cada capacidad a la APK. Luego 5 (relay) según el resultado del NAT
-4G, y 7.
+**Orden:** 0 → 1 → APK mínima → 2 → 2b → 3 → 4 (hechas). Ahora, fase 5 en este orden:
+**5f (arranque automático) → 5d (fuerza bruta) → validar en uso real → 5e (relay)**, y después 7.
+El relay va al final a propósito: primero conocer el producto con los caminos directos.
 
 ---
 
@@ -215,7 +248,8 @@ STUN") → 2 → 3 → 4, agregando cada capacidad a la APK. Luego 5 (relay) seg
 
 | Tema | Decisión | Por qué |
 |---|---|---|
-| P2P | WebRTC (`pion/webrtc`) | ICE/STUN/TURN/DTLS/data channels resueltos; Go ya conocido |
+| P2P | Hole punching propio + QUIC (`quic-go`) sobre el mismo socket (antes: `pion/webrtc`) | WebRTC traería su propio ICE y tiraría el punching hecho a mano; QUIC da retransmisión y streams, y no se entera de cambios de camino |
+| NAT | Medir en cada intento (`rda stun` / tipo de NAT en la offer), nunca asumir por red | el 4G cambió de EIM a simétrico el mismo día (experimentos.md 2026-11-11) |
 | Señalización | API Gateway WebSocket + Lambda + DynamoDB | push al PC sin polling, costo ~0 |
 | Relay | Relay propio en Fargate bajo demanda (antes: `pion/turn` en EC2) | sin servidor que mantener, se enciende solo si fallan los caminos directos; ver fase 5 |
 | APK | Kotlin nativo (no React Native) | el core Go sale como `.aar`, que se consume desde Kotlin; RN agregaría una capa (módulo nativo Kotlin igual) + Expo/EAS/nvm. Toolchain ya instalada (Android Studio, SDK 36, NDK 27) |
@@ -244,10 +278,11 @@ Relay siempre encendido: ~7 (EC2) a ~11 (Fargate) USD/mes, incluida la IPv4 púb
 
 - **PC del trabajo:** un agente que acepta conexiones vía hole punching puede violar la política
   de seguridad de la empresa. Consultar antes de instalar.
-- **NAT simétrico en 4G:** descartado para esta operadora (2026-11-10, `rda natlab`: EIM con
-  bloque de ~512 puertos). Otras operadoras u oficinas pueden serlo: medir con `rda natlab`.
-- **Go 1.22 local:** versiones recientes de `gomobile` / `pion` pueden pedir Go más nuevo →
-  actualizar Go o fijar versiones.
+- **NAT simétrico en 4G:** ocurre. La misma operadora midió EIM en la mañana y simétrico en la
+  tarde del 2026-11-11 (y la oficina es simétrico con puertos al azar). Sin UPnP ni puerto fijo
+  en el PC, el punching normal no conecta: por eso 5d y 5e. Medir con `rda stun` antes de probar.
+- **Sin acceso remoto al agente:** si el agente de un PC se cae o hay que actualizarlo, no se
+  puede hacer desde fuera. Lo resuelve 5f.
 - **Batería / Android:** el sistema mata conexiones en segundo plano; diseñado para reconectar
   rápido en vez de mantener vivo.
 - **Seguridad de la señalización:** tokens por dispositivo; la Lambda solo empareja dispositivos
