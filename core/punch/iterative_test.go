@@ -2,6 +2,7 @@ package punch
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -192,5 +193,27 @@ func TestIterativeFailsCleanlyWhenNothingMatches(t *testing.T) {
 	mac.mu.Unlock()
 	if extras != 0 {
 		t.Errorf("quedaron %d sockets de Spray abiertos", extras)
+	}
+}
+
+// Los datos de barrido vienen del otro lado: nada de red local ni direcciones especiales.
+func TestSweepInfoRejectsNonPublicIPs(t *testing.T) {
+	base := SweepInfo{Lo: 33792, Hi: 34047, Sockets: 256}
+	for ip, ok := range map[string]bool{
+		"198.51.100.30": true,
+		"192.168.1.11":  false, "10.0.0.1": false, "172.16.5.4": false, // red local
+		"127.0.0.1": false, "100.64.1.2": false, "224.0.0.1": false, // loopback, CGNAT, multicast
+		"255.255.255.255": false, "0.0.0.0": false, "169.254.1.1": false,
+	} {
+		info := base
+		info.IPs = []netip.Addr{netip.MustParseAddr(ip)}
+		if err := info.validate(); (err == nil) != ok {
+			t.Errorf("%s: validate() = %v, se esperaba válido=%v", ip, err, ok)
+		}
+	}
+	low := base
+	low.IPs, low.Lo = []netip.Addr{netip.MustParseAddr("198.51.100.30")}, 22
+	if low.validate() == nil {
+		t.Error("aceptó un rango que empieza bajo 1024")
 	}
 }

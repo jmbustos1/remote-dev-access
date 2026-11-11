@@ -57,10 +57,25 @@ func (i SweepInfo) Probes() (want, perIP int) {
 }
 
 func (i SweepInfo) validate() error {
-	if len(i.IPs) == 0 || len(i.IPs) > 8 || i.Lo == 0 || i.Hi < i.Lo || i.Sockets <= 0 {
+	if len(i.IPs) == 0 || len(i.IPs) > 8 || i.Lo < 1024 || i.Hi < i.Lo || i.Sockets <= 0 {
 		return fmt.Errorf("datos de barrido inválidos: %+v", i)
 	}
+	// Solo IPv4 públicas: los datos vienen del otro lado, y sin este filtro un
+	// dispositivo comprometido podría hacer que barramos nuestra propia red local
+	// (192.168.x.x), loopback, multicast o el espacio del CGNAT.
+	for _, ip := range i.IPs {
+		if !publicIPv4(ip) {
+			return fmt.Errorf("datos de barrido inválidos: %s no es una IPv4 pública", ip)
+		}
+	}
 	return nil
+}
+
+var cgnatSpace = netip.MustParsePrefix("100.64.0.0/10") // RFC 6598, compartido por los CGNAT
+
+func publicIPv4(ip netip.Addr) bool {
+	return ip.Is4() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !cgnatSpace.Contains(ip) &&
+		ip != netip.AddrFrom4([4]byte{255, 255, 255, 255})
 }
 
 // Spray es el lado simétrico: abre n sockets, dispara desde todos hacia los
@@ -267,7 +282,10 @@ func (s *Session) sweepInfo(socks []Conn) SweepInfo {
 		}
 	}
 	// Cualquier bloque de ese tamaño que contenga lo observado cae en [hi−bloque, lo+bloque].
-	if a := natlab.AnalyzeAllocation(obs); a.Answers >= 4 && a.Block < int(info.Hi-info.Lo) {
+	// Solo si lo observado cabe en el bloque: con asignación secuencial (bloque
+	// estimado 64) o que conserva el puerto (1), los puertos se reparten más allá
+	// y el rango saldría invertido (lo > hi): se barre el rango completo.
+	if a := natlab.AnalyzeAllocation(obs); a.Answers >= 4 && a.Block < int(info.Hi-info.Lo) && int(a.Max)-int(a.Min) < a.Block {
 		info.Lo = uint16(max(1024, int(a.Max)-a.Block))
 		info.Hi = uint16(min(65535, int(a.Min)+a.Block))
 	}
